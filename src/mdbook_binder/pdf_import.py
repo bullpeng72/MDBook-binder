@@ -639,6 +639,16 @@ def clean_paragraphs(raw_text: str) -> str:
             flush_block()
             continue
 
+        # 원문이 "#1) Load the model"처럼 "#"을 순번 표기로 쓰는 경우가
+        # 흔한데, python-markdown은 "#" 뒤에 공백이 없어도 ATX 헤딩으로
+        # 인식해(예: "#1) ..." → <h1>) 챕터당 H1 하나 규칙이 깨지고 본문
+        # 곳곳이 큰 제목으로 렌더된다(실사용 PDF로 재현됨). 이 함수는 절대
+        # "#"으로 시작하는 줄을 스스로 만들지 않으므로(제목 줄은
+        # import_pdf()가 별도로 붙인다), 원문에서 온 줄 맨 앞 "#"은 전부
+        # 이스케이프해도 안전하다.
+        if line.startswith("#"):
+            line = "\\" + line
+
         if _TABLE_ROW_RE.match(line) or _IMAGE_REF_RE.match(line):
             flush_prose()
             block_lines.append(line)

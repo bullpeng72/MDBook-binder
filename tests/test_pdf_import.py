@@ -187,6 +187,16 @@ class TestCleanParagraphs:
         raw = "- A bullet that wraps\n  across two lines."
         assert clean_paragraphs(raw) == "- A bullet that wraps across two lines."
 
+    def test_leading_hash_is_escaped_to_avoid_accidental_heading(self):
+        """원문의 "#1) ..." 같은 순번 표기가 python-markdown에서 공백 없이도
+        ATX 헤딩(<h1>)으로 오인식되는 것을 막기 위해 줄 맨 앞 "#"을 이스케이프한다."""
+        raw = "#1) Load the model We start by loading the tokenizer."
+        assert clean_paragraphs(raw) == "\\#1) Load the model We start by loading the tokenizer."
+
+    def test_leading_hash_run_escaped_with_single_backslash(self):
+        raw = "## Not a real heading either"
+        assert clean_paragraphs(raw) == "\\## Not a real heading either"
+
     def test_numbered_and_lettered_markers_also_split(self):
         raw = "1. First item\na. Sub item\n* Star item"
         assert clean_paragraphs(raw) == "1. First item\n\na. Sub item\n\n* Star item"
