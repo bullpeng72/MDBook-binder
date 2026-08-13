@@ -22,16 +22,21 @@ pdfplumber로 단어별 (x, y) 좌표를 직접 얻어 두 가지를 처리한�
   추정)를 위치 기반으로 제거한다. 매 페이지 값이 바뀌어
   strip_repeated_lines()(동일 문자열 반복 감지)로는 못 잡는 것을 보완한다
   (실사용 PDF로 확인 — 본문 문장 사이사이에 쪽번호가 단락으로 끼어듦).
+- 이미지 추출: pypdf(디코딩된 바이트)와 pdfplumber(정확한 좌표)를 XObject
+  이름으로 대응시켜 이미지를 파일로 저장하고, 위치에 맞춰 본문 흐름에
+  마크다운 이미지 참조로 끼워 넣는다. 장식용 스페이서(너무 작은 이미지)와
+  여러 페이지에 반복되는 로고/아이콘은 제외한다.
 
-챕터 분리(Part_/Chapter_ 명명 규칙에 맞춘 자동 분할)와 이미지 추출은 Phase 1
-스코프 밖이다 — PDF 전체를 파일 하나로 뽑아낸다. 그래도 manifest.py의 3순위
-자연정렬 폴백이 단일 파일 코퍼스를 그대로 받아들이므로, 이 모듈의 산출물은
+챕터 분리(Part_/Chapter_ 명명 규칙에 맞춘 자동 분할)는 Phase 2 스코프다 —
+PDF 전체를 파일 하나로 뽑아낸다. 그래도 manifest.py의 3순위 자연정렬
+폴백이 단일 파일 코퍼스를 그대로 받아들이므로, 이 모듈의 산출물은
 manifest.py를 전혀 건드리지 않고도 그 자체로 유효한 mdbook-binder 코퍼스다
 (`build html`/`build pdf`/`translate` 모두 바로 이어받을 수 있다).
 """
 
 from __future__ import annotations
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -73,11 +78,18 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 # _process_page()가 만든 마크다운 표의 행 — 그대로 보존해야 하므로 하드랩
 # 해제/불릿 분리 로직을 타지 않게 clean_paragraphs()에서 별도 취급한다.
 _TABLE_ROW_RE = re.compile(r"^\|.*\|$")
+# _collect_page_images()가 본문 흐름에 끼워 넣는 이미지 참조 — 표 행과
+# 마찬가지로 하드랩 해제 대상이 아니다(옆의 캡션 문장과 한 줄로 합쳐지면
+# 마크다운 이미지 문법이 깨진다).
+_IMAGE_REF_RE = re.compile(r"^!\[[^\]]*\]\([^)]*\)$")
 # pdfplumber.extract_words()의 기본 단어 구분 임계값 — calibrate_word_x_tolerance()가
 # 문서별로 이보다 낮춰야 할 근거를 못 찾으면 이 값을 그대로 쓴다. 낮추는
 # 방향으로만 보정하는 이유는 반대로 올리면(단어 사이 간격을 넓게 잡으면)
 # 정상적으로 붙어 있던 단어까지 잘못 합쳐질 위험이 더 크기 때문이다.
 _DEFAULT_X_TOLERANCE = 3.0
+# 이 값(페이지 표시 크기 기준, pt)보다 작은 이미지는 장식용 스페이서/구분선/
+# 트래킹 픽셀로 보고 제외한다.
+_MIN_IMAGE_DIMENSION = 20.0
 # 쪽번호로 볼 페이지 상/하단 여백 비율 — 표준적인 책 레이아웃의 위/아래
 # 여백 비중과 비슷한 값이다.
 _PAGE_NUMBER_MARGIN_FRAC = 0.1
@@ -436,7 +448,102 @@ def calibrate_word_x_tolerance(gaps: list[float], *, default: float = _DEFAULT_X
     return default
 
 
-def extract_pdf_text(pdf_path: Path) -> list[str]:
+def _collect_page_images(pdf, pdf_path: Path) -> list[list[dict]]:
+    """페이지별로 이미지 메타데이터(정확한 위치 + 디코딩된 원본 바이트 + 해시)를 수집한다.
+
+    pdfplumber의 page.images는 정확한 좌표(x0/top 등)를 주지만 디코딩된
+    이미지 바이트를 깔끔하게 꺼내는 API가 약하고, pypdf의 page.images는
+    반대로 디코딩은 잘 하지만(내부적으로 Pillow 사용) 좌표가 없다 — 둘 다
+    필요해서 XObject 이름으로 서로 대응시킨다(pypdf는 이름에 확장자를
+    붙인다: "Im8" → "Im8.png").
+
+    실패해도(Pillow 미설치, 손상된 이미지 스트림 등) 전체 임포트를 막지
+    않는다 — 이미지 없이 텍스트만이라도 뽑는 게 낫다(관대한 파싱 원칙,
+    이미 write_minimal_book_yaml 등에서 쓰는 것과 동일한 원칙).
+    """
+    try:
+        import pypdf
+
+        reader = pypdf.PdfReader(str(pdf_path))
+    except Exception:
+        return [[] for _ in pdf.pages]
+
+    result: list[list[dict]] = []
+    for plumber_page, pypdf_page in zip(pdf.pages, reader.pages):
+        plumber_images = {img["name"]: img for img in plumber_page.images}
+        page_result: list[dict] = []
+        try:
+            pypdf_images = list(pypdf_page.images)
+        except Exception:
+            pypdf_images = []
+        for pypdf_img in pypdf_images:
+            name = pypdf_img.name
+            base_name = name.rsplit(".", 1)[0] if "." in name else name
+            ext = name.rsplit(".", 1)[-1] if "." in name else "png"
+            pos = plumber_images.get(base_name)
+            if pos is None or not pypdf_img.data:
+                continue
+            if pos["width"] < _MIN_IMAGE_DIMENSION or pos["height"] < _MIN_IMAGE_DIMENSION:
+                continue
+            page_result.append({
+                "x0": pos["x0"], "x1": pos["x1"], "top": pos["top"], "bottom": pos["bottom"],
+                "data": pypdf_img.data, "ext": ext,
+                "hash": hashlib.md5(pypdf_img.data).hexdigest(),
+            })
+        result.append(page_result)
+    return result
+
+
+def _filter_repeated_images(pages_images: list[list[dict]], *, min_fraction: float = 0.5) -> list[list[dict]]:
+    """여러 페이지에 걸쳐 동일한 이미지(같은 바이트 해시)가 반복되면 제외한다(순수 함수).
+
+    strip_repeated_lines()가 텍스트 러닝 헤더/푸터를 잡아내는 것과 같은
+    원리 — 매 페이지 반복되는 로고/아이콘은 본문 내용이 아니라 장식용
+    페이지 furniture로 본다.
+    """
+    if len(pages_images) < 2:
+        return pages_images
+
+    counts: dict[str, int] = {}
+    for page_imgs in pages_images:
+        for h in {img["hash"] for img in page_imgs}:
+            counts[h] = counts.get(h, 0) + 1
+
+    threshold = max(2, round(len(pages_images) * min_fraction))
+    repeated = {h for h, c in counts.items() if c >= threshold}
+    if not repeated:
+        return pages_images
+
+    return [[img for img in page_imgs if img["hash"] not in repeated] for page_imgs in pages_images]
+
+
+def _save_images_and_build_elements(pages_images: list[list[dict]], images_dir: Path) -> list[list[dict]]:
+    """이미지를 images_dir에 저장하고, 본문 흐름에 끼워 넣을 수 있는 "단어처럼
+    생긴" 요소 목록으로 바꾼다.
+
+    text 필드에 마크다운 이미지 참조 문자열을 담아 반환한다 — 위치(x0/x1/
+    top/bottom)만 실제 단어와 같은 좌표계로 맞춰두면, extract_pdf_text()가
+    이 요소를 일반 단어처럼 words 리스트에 섞어 넣는 것만으로
+    _group_into_rows()/detect_columns() 등 기존 파이프라인이 알아서 본문
+    읽기 순서에 맞춰 배치한다 — 이미지 전용 처리 경로를 새로 만들 필요가
+    없다.
+    """
+    result: list[list[dict]] = []
+    for page_idx, page_imgs in enumerate(pages_images):
+        elements: list[dict] = []
+        for i, img in enumerate(page_imgs):
+            filename = f"page{page_idx + 1:04d}_img{i + 1}.{img['ext']}"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            (images_dir / filename).write_bytes(img["data"])
+            elements.append({
+                "text": f"![](images/{filename})",
+                "x0": img["x0"], "x1": img["x1"], "top": img["top"], "bottom": img["bottom"],
+            })
+        result.append(elements)
+    return result
+
+
+def extract_pdf_text(pdf_path: Path, *, images_dir: Path | None = None) -> list[str]:
     """pdfplumber로 페이지별 단어를 추출해 컬럼/표를 인식한 텍스트로 변환한다(페이지 1개당 문자열 1개).
 
     pypdf의 layout 모드는 슬라이드/프레젠테이션류 PDF의 줄바꿈은 잘 복원하지만
@@ -444,16 +551,27 @@ def extract_pdf_text(pdf_path: Path) -> list[str]:
     섞어버린다(y좌표 대역만으로 줄을 재구성해 컬럼 개념이 없음 — 실사용
     PDF로 재현·확인됨). pdfplumber로 단어 하나하나의 (x, y) 좌표를 직접 받아
     detect_columns()/detect_table()로 재구성하면 이 문제를 피할 수 있다.
+
+    images_dir가 주어지면 이미지도 추출해 그 아래(images/ 하위 아님 —
+    images_dir 자체가 images/ 폴더)에 저장하고, 위치에 맞춰 본문 흐름에
+    마크다운 이미지 참조로 끼워 넣는다. None이면(기본값) 텍스트만 뽑는다.
     """
     import pdfplumber
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         x_tolerance = calibrate_word_x_tolerance(_sample_char_gaps(pdf))
+
+        image_elements_per_page: list[list[dict]] = [[] for _ in pdf.pages]
+        if images_dir is not None:
+            pages_images = _filter_repeated_images(_collect_page_images(pdf, pdf_path))
+            image_elements_per_page = _save_images_and_build_elements(pages_images, images_dir)
+
         pages = []
-        for page in pdf.pages:
+        for page, img_elements in zip(pdf.pages, image_elements_per_page):
             words = page.extract_words(x_tolerance=x_tolerance)
             words = filter_garbled_words(words)
             words = filter_page_number_words(words, page.height)
+            words = words + img_elements
             pages.append(_process_page(words))
         return pages
 
@@ -502,30 +620,30 @@ def clean_paragraphs(raw_text: str) -> str:
     doc_bullet_chars = _detect_document_bullet_chars(raw_text)
     paragraphs: list[str] = []
     current: list[str] = []
-    table_rows: list[str] = []
+    block_lines: list[str] = []
 
     def flush_prose() -> None:
         if current:
             paragraphs.append(" ".join(current))
             current.clear()
 
-    def flush_table() -> None:
-        if table_rows:
-            paragraphs.append("\n".join(table_rows))
-            table_rows.clear()
+    def flush_block() -> None:
+        if block_lines:
+            paragraphs.append("\n".join(block_lines))
+            block_lines.clear()
 
     for raw_line in raw_text.split("\n"):
         line = raw_line.strip()
         if not line:
             flush_prose()
-            flush_table()
+            flush_block()
             continue
 
-        if _TABLE_ROW_RE.match(line):
+        if _TABLE_ROW_RE.match(line) or _IMAGE_REF_RE.match(line):
             flush_prose()
-            table_rows.append(line)
+            block_lines.append(line)
             continue
-        flush_table()
+        flush_block()
 
         is_doc_bullet = len(line) > 1 and line[0].lower() in doc_bullet_chars and line[1] == " "
         if _BULLET_MARKER_RE.match(line) or is_doc_bullet:
@@ -540,16 +658,21 @@ def clean_paragraphs(raw_text: str) -> str:
             flush_prose()
 
     flush_prose()
-    flush_table()
+    flush_block()
     return "\n\n".join(paragraphs)
 
 
-def import_pdf(pdf_path: Path, out_dir: Path, *, title: str | None = None) -> Path:
+def import_pdf(pdf_path: Path, out_dir: Path, *, title: str | None = None, extract_images: bool = True) -> Path:
     """PDF_PATH를 단일 평면 마크다운 + 최소 book.yaml(language: en)로 out_dir에 쓴다.
 
-    챕터 분리·이미지 추출 없음(Phase 2/3). 반환값은 생성된 .md 파일 경로.
+    extract_images=True(기본)면 out_dir/images/에 이미지를 저장하고 본문
+    흐름에 위치에 맞춰 끼워 넣는다 — html_book.py의 base64 이미지 임베드가
+    상대경로 `images/...` 참조를 그대로 읽으므로, 이 코퍼스를 build html로
+    바로 이어붙여도 이미지가 그대로 살아있다. 챕터 분리는 Phase 2 스코프다.
+    반환값은 생성된 .md 파일 경로.
     """
-    pages = strip_repeated_lines(extract_pdf_text(pdf_path))
+    images_dir = out_dir / "images" if extract_images else None
+    pages = strip_repeated_lines(extract_pdf_text(pdf_path, images_dir=images_dir))
     body = clean_paragraphs("\n\n".join(pages))
 
     stem = title or pdf_path.stem

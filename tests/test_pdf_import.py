@@ -5,8 +5,10 @@ from pathlib import Path
 from mdbook_binder.manifest import TIER_NATURAL_SORT, resolve_verbose
 from mdbook_binder.pdf_import import (
     _detect_document_bullet_chars,
+    _filter_repeated_images,
     _group_into_rows,
     _row_groups,
+    _save_images_and_build_elements,
     calibrate_word_x_tolerance,
     clean_paragraphs,
     detect_columns,
@@ -87,6 +89,53 @@ def _make_positioned_pdf(placements: list[tuple[str, float, float]]) -> bytes:
         ),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
         b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref_offset = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for off in offsets[1:]:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF".encode()
+    return bytes(out)
+
+
+def _make_pdf_with_image(
+    text_lines: list[tuple[str, float, float]], *, image_xy: tuple[float, float] = (100, 400),
+    image_wh: tuple[int, int] = (40, 30), image_scale: float = 4.0, image_rgb: tuple[int, int, int] = (255, 0, 0),
+) -> bytes:
+    """텍스트 배치 + 실제로 페이지에 그려진(Do 연산자로 호출된) 단색 RGB
+    이미지 하나를 포함한 최소 유효 PDF를 만든다.
+
+    XObject를 리소스 딕셔너리에만 등록하고 콘텐츠 스트림에서 `Do`로 실제
+    호출하지 않으면 pypdf는 찾아내도(리소스 딕셔너리를 그냥 순회) pdfplumber는
+    못 찾는다(콘텐츠 스트림에 실제로 그려진 것만 image로 본다) — 이 픽스처는
+    반드시 `Do`까지 호출해 두 라이브러리 모두에서 이미지가 보이게 한다.
+    """
+    w, h = image_wh
+    img_bytes = bytes(image_rgb) * (w * h)
+    text_ops = " ".join(f'BT /F1 12 Tf 1 0 0 1 {x} {y} Tm ({text}) Tj ET' for text, x, y in text_lines)
+    ix, iy = image_xy
+    img_ops = f"q {w * image_scale} 0 0 {h * image_scale} {ix} {iy} cm /Im1 Do Q"
+    content = (text_ops + " " + img_ops).encode("latin-1")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> /XObject << /Im1 6 0 R >> >> "
+            b"/MediaBox [0 0 612 792] /Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(content)).encode() + b" >>\nstream\n" + content + b"\nendstream",
+        (
+            f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB "
+            f"/BitsPerComponent 8 /Length {len(img_bytes)} >>\nstream\n"
+        ).encode() + img_bytes + b"\nendstream",
     ]
     out = bytearray(b"%PDF-1.4\n")
     offsets = [0]
@@ -487,3 +536,94 @@ def test_import_pdf_renders_genuine_table_as_markdown(tmp_path: Path):
     assert "| Name" in body
     assert "| Alice" in body
     assert "-" * 3 in body  # 헤더 구분선(| --- | --- |)이 있어야 유효한 마크다운 표
+
+
+def _fake_image(hash_val: str, x0: float = 0, top: float = 0) -> dict:
+    return {"x0": x0, "x1": x0 + 40, "top": top, "bottom": top + 40, "data": b"fake", "ext": "png", "hash": hash_val}
+
+
+class TestFilterRepeatedImages:
+    def test_image_repeated_on_every_page_removed(self):
+        """회귀 대상은 없지만 strip_repeated_lines()와 동일한 발상 —
+        매 페이지 반복되는 로고/아이콘은 본문 내용이 아니라 장식용이다."""
+        pages = [[_fake_image("logo")], [_fake_image("logo")], [_fake_image("logo")]]
+        result = _filter_repeated_images(pages)
+        assert result == [[], [], []]
+
+    def test_unique_images_kept(self):
+        pages = [[_fake_image("a")], [_fake_image("b")], [_fake_image("c")]]
+        assert _filter_repeated_images(pages) == pages
+
+    def test_single_page_returned_unchanged(self):
+        pages = [[_fake_image("logo")]]
+        assert _filter_repeated_images(pages) == pages
+
+    def test_below_threshold_kept(self):
+        pages = [[_fake_image("logo")], [], [], []]
+        result = _filter_repeated_images(pages, min_fraction=0.5)
+        assert result[0] == [_fake_image("logo")]
+
+
+class TestSaveImagesAndBuildElements:
+    def test_writes_file_and_returns_positioned_markdown_element(self, tmp_path: Path):
+        pages_images = [[{"x0": 10.0, "x1": 50.0, "top": 20.0, "bottom": 60.0, "data": b"pngdata", "ext": "png"}]]
+        images_dir = tmp_path / "images"
+
+        result = _save_images_and_build_elements(pages_images, images_dir)
+
+        assert len(result) == 1 and len(result[0]) == 1
+        element = result[0][0]
+        assert element["text"] == "![](images/page0001_img1.png)"
+        assert element["x0"] == 10.0 and element["top"] == 20.0
+        saved = images_dir / "page0001_img1.png"
+        assert saved.read_bytes() == b"pngdata"
+
+    def test_no_images_creates_no_directory(self, tmp_path: Path):
+        images_dir = tmp_path / "images"
+        result = _save_images_and_build_elements([[], []], images_dir)
+        assert result == [[], []]
+        assert not images_dir.exists()
+
+
+def test_import_pdf_extracts_image_and_places_it_in_reading_order(tmp_path: Path):
+    pdf_path = tmp_path / "with_image.pdf"
+    pdf_path.write_bytes(
+        _make_pdf_with_image([("Before the image.", 72, 700), ("After the image.", 72, 300)], image_xy=(100, 500))
+    )
+    out_dir = tmp_path / "corpus"
+
+    md_path = import_pdf(pdf_path, out_dir)
+    body = md_path.read_text(encoding="utf-8")
+
+    assert (out_dir / "images" / "page0001_img1.png").exists()
+    assert "![](images/page0001_img1.png)" in body
+    before_idx = body.index("Before the image.")
+    image_idx = body.index("![](images/")
+    after_idx = body.index("After the image.")
+    assert before_idx < image_idx < after_idx, "이미지가 실제 페이지 위치(중간)가 아니라 엉뚱한 순서에 배치됨"
+
+
+def test_import_pdf_extract_images_false_skips_images(tmp_path: Path):
+    pdf_path = tmp_path / "with_image.pdf"
+    pdf_path.write_bytes(_make_pdf_with_image([("Hello world.", 72, 700)]))
+    out_dir = tmp_path / "corpus"
+
+    md_path = import_pdf(pdf_path, out_dir, extract_images=False)
+    body = md_path.read_text(encoding="utf-8")
+
+    assert "![](images/" not in body
+    assert not (out_dir / "images").exists()
+
+
+def test_import_pdf_filters_tiny_decorative_images(tmp_path: Path):
+    pdf_path = tmp_path / "tiny_image.pdf"
+    pdf_path.write_bytes(
+        _make_pdf_with_image([("Hello world.", 72, 700)], image_wh=(2, 2), image_scale=1.0)
+    )
+    out_dir = tmp_path / "corpus"
+
+    md_path = import_pdf(pdf_path, out_dir)
+    body = md_path.read_text(encoding="utf-8")
+
+    assert "![](images/" not in body
+    assert not (out_dir / "images").exists()

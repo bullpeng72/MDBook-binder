@@ -261,22 +261,27 @@ def import_group() -> None:
 예시:
   mdbook-binder import pdf ./book.pdf ./corpus-en
   mdbook-binder import pdf ./book.pdf ./corpus-en --title "My Book"
+  mdbook-binder import pdf ./book.pdf ./corpus-en --no-images
 """
 )
 @click.argument("pdf_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("out_dir", type=click.Path(path_type=Path))
 @click.option("--title", "title_override", default=None, help="챕터 제목/파일명 오버라이드 (기본: PDF 파일명)")
-def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None) -> None:
+@click.option("--no-images", "no_images", is_flag=True, default=False, help="이미지를 추출하지 않고 텍스트만 뽑는다")
+def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool) -> None:
     """PDF_PATH(영문 PDF)를 단일 평면 마크다운 + book.yaml로 추출해 OUT_DIR에 만든다.
 
-    챕터 분리·이미지 추출은 하지 않는다(전체를 파일 하나로) — Phase 2/3.
-    결과는 그 자체로 `mdbook-binder build html/pdf`나 `translate`가 바로
-    받는 유효한 코퍼스다(3순위 자연정렬 폴백이 단일 파일도 그대로 받는다).
+    챕터 분리는 하지 않는다(전체를 파일 하나로) — Phase 2. 이미지는 기본적으로
+    OUT_DIR/images/에 저장하고 본문 흐름의 원래 위치에 맞춰 끼워 넣는다
+    (--no-images로 끌 수 있다) — 장식용 스페이서와 여러 페이지에 반복되는
+    로고/아이콘은 제외한다. 결과는 그 자체로 `mdbook-binder build html/pdf`나
+    `translate`가 바로 받는 유효한 코퍼스다(3순위 자연정렬 폴백이 단일 파일도
+    그대로 받는다).
     """
     from mdbook_binder.pdf_import import import_pdf
 
     print(f"\U0001f4c4 Extracting {pdf_path} ...")
-    md_path = import_pdf(pdf_path, out_dir, title=title_override)
+    md_path = import_pdf(pdf_path, out_dir, title=title_override, extract_images=not no_images)
     print(f"✅ {md_path}")
 
 
@@ -285,7 +290,7 @@ def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None) ->
     epilog="""\b
 예시:
   mdbook-binder translate ~/my-book ~/my-book-ko --direction e2k
-  mdbook-binder translate ~/my-book ~/my-book-en --direction k2e --model qwen3.6:35b
+  mdbook-binder translate ~/my-book ~/my-book-en --direction k2e --model qwen3.6:35b-mlx
   mdbook-binder translate ~/my-book ~/my-book-ko --direction e2k --check-only
 """
 )
@@ -297,7 +302,7 @@ def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None) ->
 )
 @click.option(
     "--model", "model_override", default=None,
-    help="Ollama 모델명 오버라이드 (기본: book.yaml의 translation.model, 그것도 없으면 qwen3.6:35b)",
+    help="Ollama 모델명 오버라이드 (기본: book.yaml의 translation.model, 그것도 없으면 exaone3.5:7.8b)",
 )
 @click.option(
     "--host", "host_override", default=None,

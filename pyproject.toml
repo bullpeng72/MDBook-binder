@@ -26,8 +26,9 @@ dependencies = [
 # pdfplumber(＋전이 의존성 pdfminer.six)는 import pdf의 컬럼/표 인식에 쓰인다
 # — pypdf의 layout 모드는 y좌표 대역만으로 줄을 재구성해 컬럼 개념이 없다
 # (실사용 PDF로 검증된 한계). pypdf는 build pdf의 병합(PdfWriter)에 계속 쓰여
-# 둘 다 필요하다.
-pdf = ["playwright>=1.62,<1.63", "pypdf>=4.0", "pdfplumber>=0.11.0"]
+# 둘 다 필요하다. pillow는 import pdf의 이미지 추출(pypdf가 내부적으로
+# 요구함)과 웹 에디터([editor] extra) 양쪽에서 쓰인다.
+pdf = ["playwright>=1.62,<1.63", "pypdf>=4.0", "pdfplumber>=0.11.0", "pillow>=10.0"]
 editor = ["flask>=3.0", "pillow>=10.0"]
 # ollama는 순수 HTTP API 클라이언트라 playwright처럼 특정 바이너리 리비전에
 # 묶이지 않는다 — 상한 없이 최신을 허용한다.
@@ -51,6 +52,10 @@ target-version = "py311"
 # Playwright/Chromium 미설치를 포함해 사전 렌더링이 실패할 수 있는 사유가
 # 다양하다 — 무엇이 됐든 CDN 클라이언트 렌더링으로 조용히 폴백해야 한다.
 "src/mdbook_binder/mermaid_prerender.py" = ["BLE001"]
+# 이미지 추출은 선택 기능이다 — Pillow 미설치, 손상된 이미지 스트림 등
+# 사유가 다양해도 텍스트 추출 자체를 막으면 안 되므로 무엇이 됐든 이미지
+# 없이 계속 진행해야 한다(관대한 파싱 원칙).
+"src/mdbook_binder/pdf_import.py" = ["BLE001"]
 # check_environment()는 Playwright Chromium을 실제로 띄워봐야 하는데 실패
 # 사유가 다양하다 — 무엇이 됐든 "미설치"로 보고하고 설치 안내를 보여줘야 한다.
 "src/mdbook_binder/check.py" = ["BLE001"]
