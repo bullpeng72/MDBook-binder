@@ -3,7 +3,7 @@
 import unicodedata
 from pathlib import Path
 
-from mdbook_binder.html_book import build_html
+from mdbook_binder.html_book import _slugify, build_html
 
 
 def _write(root: Path, rel: str, content: str) -> Path:
@@ -11,6 +11,28 @@ def _write(root: Path, rel: str, content: str) -> Path:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(content, encoding="utf-8")
     return p
+
+
+class TestSlugify:
+    def test_mixed_korean_and_ascii_title_is_not_reduced_to_ascii_only(self):
+        """회귀 대상: 예전 구현은 문자열 전체를 한 번에 ASCII로 치환 시도해,
+        제목에 영문 단어가 하나라도 섞여 있으면(예: "AI") 그 잔여물만 남기고
+        한글 전체를 버렸다("실전 AI 에이전트 하네스 엔지니어링" → "ai")."""
+        slug = _slugify("실전 AI 에이전트 하네스 엔지니어링")
+        assert slug == "실전-ai-에이전트-하네스-엔지니어링"
+
+    def test_pure_korean_title_preserved(self):
+        assert _slugify("나의 책") == "나의-책"
+
+    def test_pure_ascii_title_lowercased_and_hyphenated(self):
+        assert _slugify("My Book Title") == "my-book-title"
+
+    def test_diacritics_romanized(self):
+        assert _slugify("Café du matin") == "cafe-du-matin"
+
+    def test_empty_or_symbol_only_falls_back_to_section(self):
+        assert _slugify("") == "section"
+        assert _slugify("!!!") == "section"
 
 
 def test_duplicate_chapter_titles_get_distinct_section_ids(tmp_path: Path):

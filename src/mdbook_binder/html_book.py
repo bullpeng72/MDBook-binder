@@ -29,10 +29,21 @@ from mdbook_binder.theme import theme_css
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
 
 
+def _romanize_char(ch: str) -> str:
+    """분해 가능한 문자(악센트 등)만 ASCII로 치환하고, 나머지는 원문 그대로 둔다.
+
+    문자열 전체를 한 번에 ASCII로 치환하려 하면(예전 구현) 제목에 영문 단어가
+    하나라도 섞여 있을 때 그 영문 잔여물만 남기고 한글 전체를 버리는 문제가
+    있었다(예: "실전 AI 에이전트..." → "ai"). 문자 단위로 판단하면 "é"처럼
+    분해되면 ASCII 잔여물이 남는 문자만 로마자로 바뀌고, 한글처럼 NFKD 분해가
+    ASCII로 안 떨어지는 문자는 원본 그대로 보존된다.
+    """
+    ascii_ch = unicodedata.normalize("NFKD", ch).encode("ascii", "ignore").decode("ascii")
+    return ascii_ch if ascii_ch else ch
+
+
 def _slugify(text: str) -> str:
-    text = unicodedata.normalize("NFKD", text)
-    ascii_only = text.encode("ascii", "ignore").decode("ascii")
-    base = ascii_only if ascii_only.strip() else text
+    base = "".join(_romanize_char(ch) for ch in text)
     base = re.sub(r"[^\w\s-]", "", base, flags=re.UNICODE).strip().lower()
     slug = re.sub(r"[\s_]+", "-", base)
     return slug or "section"
