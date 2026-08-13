@@ -4,6 +4,7 @@ from pathlib import Path
 
 from mdbook_binder.manifest import TIER_NATURAL_SORT, resolve_verbose
 from mdbook_binder.pdf_import import (
+    _detect_document_bullet_chars,
     _group_into_rows,
     _row_groups,
     clean_paragraphs,
@@ -193,6 +194,42 @@ class TestDetectColumns:
 
     def test_empty_words_returns_no_columns(self):
         assert detect_columns([]) == []
+
+
+class TestDetectDocumentBulletChars:
+    def test_frequently_repeated_leading_letter_detected(self):
+        """회귀 대상: 특정 PDF의 커스텀 불릿 폰트가 글리프를 알파벳 한 글자
+        (구두점 없음)로 잘못 매핑해 내보내는 경우 — 실사용 PDF로 확인된 문제."""
+        raw = "\n".join([f"q Item number {i} in the list" for i in range(6)])
+        assert _detect_document_bullet_chars(raw) == {"q"}
+
+    def test_below_threshold_not_detected(self):
+        raw = "\n".join([f"q Item number {i}" for i in range(3)])
+        assert _detect_document_bullet_chars(raw, min_occurrences=5) == set()
+
+    def test_common_single_letter_words_excluded_even_if_frequent(self):
+        """"a"/"i"는 실제 영어 단어라 아무리 반복돼도 불릿으로 오인하면 안 된다."""
+        raw = "\n".join([f"a book about topic {i}" for i in range(10)])
+        assert _detect_document_bullet_chars(raw) == set()
+
+    def test_no_candidates_returns_empty_set(self):
+        raw = "Just a normal paragraph with no repeated single-letter line starts."
+        assert _detect_document_bullet_chars(raw) == set()
+
+
+class TestCleanParagraphsDocumentBullets:
+    def test_document_specific_bullet_char_splits_paragraphs(self):
+        """clean_paragraphs()가 _detect_document_bullet_chars()로 추론한 불릿도
+        _BULLET_MARKER_RE와 동일하게 단락 경계로 취급해야 한다."""
+        raw = "\n".join([f"q Item number {i} in the list" for i in range(6)])
+        result = clean_paragraphs(raw)
+        assert result.count("\n\n") == 5  # 6개 항목 → 단락 5번 구분
+
+    def test_infrequent_single_letter_line_not_treated_as_bullet(self):
+        """빈도가 낮으면(우연) 불릿으로 취급하지 않아 하드랩 해제 로직이 그대로 적용된다."""
+        raw = "q\nis a rare standalone letter here"
+        result = clean_paragraphs(raw)
+        assert "\n\n" not in result
 
 
 class TestDetectTable:

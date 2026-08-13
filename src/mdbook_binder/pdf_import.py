@@ -9,6 +9,10 @@ pdfplumber로 단어별 (x, y) 좌표를 직접 얻어 두 가지를 처리한�
 - 표 인식: 연속된 여러 줄이 동일한 x좌표 격자에 정렬돼 있으면 표로 보고
   마크다운 파이프 표로 재구성한다. 산문은 줄마다 단어 시작 위치가 들쭉날쭉해
   이 조건을 만족하지 않으므로 오탐 위험이 낮다.
+- 문서별 불릿 문자 추론: 특정 PDF의 커스텀 불릿 폰트가 글리프를 구두점
+  없는 알파벳 한 글자(예: "q")로 잘못 매핑해 내보내는 경우, 그 글자로
+  시작하는 줄이 문서 전체에서 비정상적으로 반복되면 이 문서만의 불릿
+  마커로 추론한다(실사용 PDF로 재현·확인된 문제).
 
 챕터 분리(Part_/Chapter_ 명명 규칙에 맞춘 자동 분할)와 이미지 추출은 Phase 1
 스코프 밖이다 — PDF 전체를 파일 하나로 뽑아낸다. 그래도 manifest.py의 3순위
@@ -34,13 +38,46 @@ _HYPHEN_BREAK_RE = re.compile(r"\w-$")
 # 슬라이드/프레젠테이션류 PDF는 불릿 항목이 문장부호로 안 끝나는 경우가
 # 많다("Interaction: Agent interacts..." 등) — 새 불릿 마커로 시작하는 줄을
 # 만나면 이전 줄이 문장부호로 안 끝났어도 그 자리에서 단락을 끊는다. 특정
-# PDF의 커스텀 불릿 폰트가 글리프를 알파벳 문자(예: "q")로 잘못 매핑해
-# 내보내는 경우까지는 다루지 않는다 — 그런 매핑은 문서마다 달라 일반화할
-# 수 없는 그 PDF 고유의 아티팩트다.
+# PDF의 커스텀 불릿 폰트가 글리프를 구두점 없는 알파벳 한 글자(예: "q")로
+# 잘못 매핑해 내보내는 경우는 이 정규식만으로 못 잡는다 — 그런 매핑은
+# 문서마다 다른 글자를 쓰므로 하드코딩할 수 없고, _detect_document_bullet_chars()가
+# 문서별로 통계적으로 추론해 보완한다.
 _BULLET_MARKER_RE = re.compile(r"^(?:[•\-*◦‣]|\d+[.)]|[a-zA-Z][.)])\s")
+# _detect_document_bullet_chars() 후보 패턴 — 구두점 없이 알파벳 한 글자 +
+# 공백으로 시작하는 줄.
+_CANDIDATE_BULLET_RE = re.compile(r"^([A-Za-z])\s+\S")
+# "a"/"i"는 실제 영어 단어("a book", "I think")라 문장 첫머리에 흔히 나온다 —
+# 아무리 자주 반복돼도 불릿 후보에서 제외해야 오탐(멀쩡한 문장을 불릿으로
+# 오인)을 피한다.
+_COMMON_SINGLE_LETTER_WORDS = {"a", "i"}
 # _process_page()가 만든 마크다운 표의 행 — 그대로 보존해야 하므로 하드랩
 # 해제/불릿 분리 로직을 타지 않게 clean_paragraphs()에서 별도 취급한다.
 _TABLE_ROW_RE = re.compile(r"^\|.*\|$")
+
+
+def _detect_document_bullet_chars(raw_text: str, *, min_occurrences: int = 5) -> set[str]:
+    """줄 맨 앞에 구두점 없이 비정상적으로 자주 등장하는 알파벳 한 글자를
+    이 문서만의 불릿 마커로 추론한다(순수 함수).
+
+    특정 PDF의 커스텀 불릿 폰트가 글리프를 알파벳 한 글자(예: "q")로 잘못
+    매핑해 내보내는 경우, "q "처럼 구두점 없이 공백만 붙는 형태는
+    _BULLET_MARKER_RE(".", ")" 뒤따르는 마커만 인식)로 못 잡는다. 어떤
+    글자가 쓰일지는 문서마다 달라 하드코딩할 수 없으므로, 문서 전체에서
+    "그 글자로 시작하는 줄"이 min_occurrences회 이상 반복되면 우연이
+    아니라 불릿 마커로 보고 채택한다. 실제 영어 단어인 "a"/"i"는 아무리
+    반복돼도 제외한다(정상 문장을 불릿으로 오인하는 것을 막기 위함).
+    """
+    counts: dict[str, int] = {}
+    for raw_line in raw_text.split("\n"):
+        line = raw_line.strip()
+        m = _CANDIDATE_BULLET_RE.match(line)
+        if not m:
+            continue
+        ch = m.group(1).lower()
+        if ch in _COMMON_SINGLE_LETTER_WORDS:
+            continue
+        counts[ch] = counts.get(ch, 0) + 1
+    return {ch for ch, n in counts.items() if n >= min_occurrences}
 
 
 def _group_into_rows(words: list[dict], y_tolerance: float = 3.0) -> list[list[dict]]:
@@ -330,8 +367,9 @@ def clean_paragraphs(raw_text: str) -> str:
     - 마크다운 표 행("| ... |")은 그대로 보존한다(연속된 행끼리는 빈 줄 없이
       묶어 표 구조가 깨지지 않게 한다) — 하드랩 해제·불릿 분리 대상이 아니다.
     - 문장부호(.!?:)로 안 끝나는 줄은 다음 줄과 공백으로 합친다(하드랩 해제)
-    - 새 불릿 마커(•/-/*/숫자./영문.)로 시작하는 줄은 그 앞에서 단락을 끊는다
-      (이전 줄이 문장부호로 안 끝났어도)
+    - 새 불릿 마커(•/-/*/숫자./영문. 및 _detect_document_bullet_chars()가
+      이 문서에서 추론한 구두점 없는 한 글자 불릿)로 시작하는 줄은 그
+      앞에서 단락을 끊는다(이전 줄이 문장부호로 안 끝났어도)
     - 단어 중간 하이픈 개행은 하이픈 없이 그대로 합친다
     - 빈 줄(몇 개가 연속이든)은 단락 구분 하나로 정규화된다
 
@@ -339,6 +377,7 @@ def clean_paragraphs(raw_text: str) -> str:
     페이지 텍스트를 페이지 단위로 반환하므로 여기 도달할 때는 이미 하나의
     이어붙인 문자열이라 원래 페이지 경계 정보가 없다(Phase 2 후보).
     """
+    doc_bullet_chars = _detect_document_bullet_chars(raw_text)
     paragraphs: list[str] = []
     current: list[str] = []
     table_rows: list[str] = []
@@ -366,7 +405,8 @@ def clean_paragraphs(raw_text: str) -> str:
             continue
         flush_table()
 
-        if _BULLET_MARKER_RE.match(line):
+        is_doc_bullet = len(line) > 1 and line[0].lower() in doc_bullet_chars and line[1] == " "
+        if _BULLET_MARKER_RE.match(line) or is_doc_bullet:
             flush_prose()
             current.append(line)
         elif current and _HYPHEN_BREAK_RE.search(current[-1]) and line[:1].islower():
