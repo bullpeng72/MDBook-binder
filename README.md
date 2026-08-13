@@ -234,34 +234,71 @@ color: green                 # 사이드바/제목 강조색 테마 (선택, 기
 ### AI로 챕터 저작하기 — Skill/프롬프트 활용
 
 챕터 초안을 AI에게 맡기면 위 [마크다운 저작 규칙](#마크다운-저작-규칙)을 모르는
-채로 써서 `check`/빌드 시점에야 문제가 드러나기 쉽다 — 규칙 자체는 이 README를
-정본(single source of truth)으로 유지하고, 사용하는 AI 도구에 맞는 방식으로
-그 정본을 참조하게 만드는 두 가지 방법을 쓸 수 있다.
+채로 써서 `check`/빌드 시점에야 문제가 드러나기 쉽다.
 
-**Claude Code — 얇은 래퍼 Skill.** 규칙을 다시 옮겨 적지 않고 이 절을
-가리키기만 하는 스킬을 저장소에 두면, 규칙이 바뀔 때 README 한 곳만 고치면
-된다.
+> ⚠️ **"README를 읽어라"는 지시로는 부족하다.** mdbook-binder는 `pip`/`pipx`로
+> 설치하는 **별도의 CLI 도구**이고, 실제로 챕터를 쓰는 곳은 이 저장소가 아니라
+> **완전히 별개인 사용자 자신의 책 코퍼스 저장소**다 — 그 저장소에는
+> mdbook-binder의 소스도, 이 README.md도 존재하지 않는다. 그래서 AI에게 "이
+> README의 저작 규칙 절을 읽고 따르라"고만 지시하는 스킬/프롬프트는 실제
+> 작업 디렉토리에 그 파일이 없어 참조가 실패한다. 규칙은 **코퍼스 저장소
+> 안에서 self-contained하게(파일을 다시 열어보지 않아도 되도록) 담아둬야**
+> 한다.
+
+**Claude Code — self-contained Skill 설치.** 규칙 본문을 스킬 안에 직접 담아
+파일로 저장해두면 된다. **어디에 저장하느냐에 따라 적용 범위가 갈린다**:
+
+| 저장 위치 | 적용 범위 |
+|---|---|
+| `<코퍼스_루트>/.claude/skills/mdbook-authoring/SKILL.md` | 그 코퍼스에서만 동작. git으로 커밋하면 팀과 공유 가능 |
+| `~/.claude/skills/mdbook-authoring/SKILL.md` | 이 컴퓨터에서 Claude Code로 여는 **모든** 코퍼스에 항상 적용 |
+
+```bash
+# 코퍼스 하나에만 적용하려면: 해당 코퍼스 루트에서 실행
+mkdir -p .claude/skills/mdbook-authoring
+# 이 컴퓨터의 모든 코퍼스에 적용하려면: 홈 디렉토리 기준으로 대신 실행
+mkdir -p ~/.claude/skills/mdbook-authoring
+```
+
+그 디렉토리 안에 `SKILL.md`라는 이름으로 아래 내용을 그대로 저장한다.
 
 ```markdown
 <!-- .claude/skills/mdbook-authoring/SKILL.md -->
 ---
 name: mdbook-authoring
-description: mdbook-binder 코퍼스에 마크다운 챕터를 추가/수정할 때 저작
-  규칙(H1 제목, 이미지 상대 경로, Mermaid 펜스, 콜아웃 마커, Part/Chapter
-  명명 규칙 등)을 적용한다. "챕터 써줘", "이 코퍼스에 새 문서 추가해줘" 등의
-  요청에 사용.
+description: mdbook-binder로 빌드되는 마크다운 코퍼스에 챕터를 새로 쓰거나
+  수정할 때 저작 규칙(H1 제목, 이미지 상대 경로, Mermaid 펜스, 콜아웃 마커,
+  raw HTML 블록, Part/Chapter 명명 규칙)을 적용한다. "챕터 써줘", "이
+  코퍼스에 새 문서 추가해줘" 등의 요청에 사용.
 ---
 
-이 저장소는 mdbook-binder로 빌드되는 마크다운 코퍼스다. 챕터를 새로 쓰거나
-수정하기 전에 README.md의 "마크다운 저작 규칙" 절
-(#마크다운-저작-규칙)을 읽고 그대로 따른다 — 규칙 원문은 그 절에만 있으므로
-여기서 다시 옮겨 적지 않는다. 작성 후에는 `mdbook-binder check <root>`로
-검증한다.
+이 저장소는 mdbook-binder로 빌드되는 마크다운 코퍼스다(mdbook-binder 자체는
+pip/pipx로 설치된 별도 CLI이며 이 저장소 안에는 없다). 챕터를 새로 쓰거나
+수정하기 전에 다음 규칙을 그대로 따른다.
+
+1. 파일은 H1(`# 제목`) 하나로 시작한다. 하위 제목은 H2 이하로 쓴다.
+2. 이미지 경로는 해당 마크다운 파일 기준 상대 경로로 쓴다.
+3. Mermaid 다이어그램은 `mermaid` 코드 펜스 블록으로 작성한다.
+4. 콜아웃(TIP박스)은 blockquote 맨 앞을 이모지로 시작한다 — 등록된
+   이모지 목록은 코퍼스 루트 book.yaml의 callouts.tip_markers를 먼저
+   확인한다(없으면 일반 인용문으로 렌더됨).
+5. 커스텀 raw HTML은 @@HTML_START@@ / @@HTML_END@@ 블록으로 감싼다.
+6. 순서 자동 인식을 받으려면 Part_<로마숫자>_.../Chapter_<NN>_... 명명
+   규칙을 따르거나, book.yaml의 order.files로 순서를 직접 명시한다.
+
+작성 후에는 `mdbook-binder check <root>`로 검증한다.
 ```
 
-**다른 AI 도구(ChatGPT/Cursor 등) — 범용 프롬프트 블록.** Claude Code의
-스킬 자동 트리거 없이도 붙여넣기만 하면 되도록, 규칙을 요약한 프롬프트를
-그대로 시스템/커스텀 프롬프트에 넣는다.
+설치는 **새로 여는 Claude Code 세션부터** 반영된다(이미 켜져 있던 세션에는
+적용되지 않는다). 이후에는 "챕터 써줘"처럼 위 `description`과 맞아떨어지는
+요청 시 자동으로 로드되거나, `/mdbook-authoring`으로 직접 호출할 수 있다.
+
+이 저장소 자체도 (dogfooding 겸 복사용 원본으로)
+[`.claude/skills/mdbook-authoring/SKILL.md`](.claude/skills/mdbook-authoring/SKILL.md)에
+동일한 내용을 두고 있다 — 저장소를 클론했다면 그 파일을 그대로 복사해도 된다.
+
+**다른 AI 도구(ChatGPT/Cursor 등) — 범용 프롬프트 블록.** 같은 이유로, 붙여넣는
+프롬프트에도 파일 참조가 아니라 규칙 본문을 직접 넣는다.
 
 ```text
 당신은 mdbook-binder로 빌드될 마크다운 챕터를 작성합니다. 다음 규칙을 반드시
@@ -274,13 +311,13 @@ description: mdbook-binder 코퍼스에 마크다운 챕터를 추가/수정할 
 5. 커스텀 raw HTML은 @@HTML_START@@ / @@HTML_END@@ 블록으로 감싼다.
 6. 순서 자동 인식을 받으려면 Part_<로마숫자>_.../Chapter_<NN>_... 명명
    규칙을 따르거나, book.yaml의 order.files로 순서를 직접 명시한다.
-자세한 근거는 프로젝트 README의 "마크다운 저작 규칙" 절을 참고하세요.
 ```
 
-두 방식 모두 규칙 본문을 복제하지 않는다 — 복제하면 README를 고칠 때마다
-스킬/프롬프트도 같이 고쳐야 해서 금방 어긋난다. 스킬은 짧은 안내문(위 예시)
-정도만 유지하고, 프롬프트 블록은 배포 시점의 스냅샷이라는 점을 감안해 이
-README가 바뀌면 함께 갱신한다.
+두 방식 모두 규칙 본문이 이 README와 두 곳(스킬 파일, 프롬프트 블록)에
+중복된다 — README의 [마크다운 저작 규칙](#마크다운-저작-규칙)이 바뀌면
+`.claude/skills/mdbook-authoring/SKILL.md`와 위 프롬프트 블록도 함께
+갱신해야 한다. "README만 고치면 된다"는 이전 설명은 코퍼스 저장소에
+README가 없다는 사실과 맞지 않아 폐기했다.
 
 ### 빌드 전 사전 점검 — check
 
