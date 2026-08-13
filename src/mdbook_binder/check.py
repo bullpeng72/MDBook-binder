@@ -120,7 +120,7 @@ def check_environment(config: BookConfig | None = None) -> list[EnvCheckItem]:
         _check_module("PDF 병합 (pypdf)", "pypdf", 'pip install "mdbook-binder[pdf]"'),
         _check_module("PDF 임포트 컬럼/표 인식 (pdfplumber)", "pdfplumber", 'pip install "mdbook-binder[pdf]"'),
         _check_module("웹 에디터 (Flask)", "flask", 'pip install "mdbook-binder[editor]"'),
-        # Pillow는 import pdf의 이미지 추출(pypdf가 내부적으로 요구)과 웹
+        # Pillow는 import의 이미지 추출(pypdf가 내부적으로 요구)과 웹
         # 에디터 양쪽에서 쓰인다 — [pdf]/[editor] 어느 쪽으로 설치해도 된다.
         _check_module("이미지 처리 (Pillow)", "PIL", 'pip install "mdbook-binder[pdf]" 또는 "mdbook-binder[editor]"'),
         check_ollama(config),

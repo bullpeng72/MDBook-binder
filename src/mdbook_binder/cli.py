@@ -4,7 +4,7 @@
     mdbook-binder build html  <root> [--out FILE] [--title TITLE] [--language ko|en] [--color NAME]
     mdbook-binder build pdf   <root> [--merge [이름]] [--out-dir ...] [--color NAME]
     mdbook-binder edit        <html>  [--port 5757] [--out ...] [--no-browser]
-    mdbook-binder import pdf  <pdf> <out_dir> [--title TITLE]
+    mdbook-binder import      <pdf> <out_dir> [--title TITLE]
     mdbook-binder translate   <root> <out_dir> --direction k2e|e2k [--model ...] [--host ...]
 """
 
@@ -32,7 +32,7 @@ _COLOR_HELP = "강조색 (기본: book.yaml color 또는 purple)"
 
 \b
 영문 PDF 번역(로컬 LLM, 토큰 비용 없음, 기본 모델 exaone3.5:7.8b):
-  mdbook-binder import pdf ~/book.pdf ~/corpus-en
+  mdbook-binder import ~/book.pdf ~/corpus-en
   mdbook-binder translate ~/corpus-en ~/corpus-ko --direction e2k
   mdbook-binder build html ~/corpus-ko
 
@@ -253,34 +253,21 @@ def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool
     )
 
 
-@main.group(
+@main.command(
     "import",
     epilog="""\b
 예시:
-  mdbook-binder import pdf <PDF_PATH> <OUT_DIR> [--title ...] [--no-images]
-
-옵션은 `import pdf --help`로 확인.
-"""
-)
-def import_group() -> None:
-    """외부 포맷(PDF 등)을 mdbook-binder 코퍼스로 변환한다."""
-
-
-@import_group.command(
-    "pdf",
-    epilog="""\b
-예시:
-  mdbook-binder import pdf ./book.pdf ./corpus-en
-  mdbook-binder import pdf ./book.pdf ./corpus-en --title "My Book"
-  mdbook-binder import pdf ./book.pdf ./corpus-en --no-images
+  mdbook-binder import ./book.pdf ./corpus-en
+  mdbook-binder import ./book.pdf ./corpus-en --title "My Book"
+  mdbook-binder import ./book.pdf ./corpus-en --no-images
 """
 )
 @click.argument("pdf_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("out_dir", type=click.Path(path_type=Path))
 @click.option("--title", "title_override", default=None, help="제목/파일명 오버라이드 (기본: PDF 파일명)")
 @click.option("--no-images", "no_images", is_flag=True, default=False, help="이미지 추출 없이 텍스트만 뽑는다")
-def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool) -> None:
-    """PDF를 마크다운 코퍼스로 추출한다.
+def import_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool) -> None:
+    """PDF를 마크다운 코퍼스로 추출한다(지원 포맷은 PDF뿐 — docx 등은 PDF로 변환 후 사용).
 
     \b
     인자:
@@ -295,6 +282,9 @@ def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no
     결과는 그 자체로 build html/pdf나 translate가 바로 받는
     유효한 코퍼스다.
     """
+    if pdf_path.suffix.lower() != ".pdf":
+        raise click.ClickException(f"PDF 파일만 지원합니다 (받은 파일: {pdf_path.name}) — docx 등은 PDF로 변환 후 다시 시도하세요")
+
     from mdbook_binder.pdf_import import import_pdf
 
     print(f"\U0001f4c4 Extracting {pdf_path} ...")

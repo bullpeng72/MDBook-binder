@@ -1,4 +1,4 @@
-"""영문 PDF → 단일 평면 마크다운 코퍼스 추출 — `mdbook-binder import pdf`.
+"""영문 PDF → 단일 평면 마크다운 코퍼스 추출 — `mdbook-binder import`.
 
 pdfplumber로 단어별 (x, y) 좌표를 직접 얻어 두 가지를 처리한다:
 - 컬럼 인식: 페이지를 가로지르는 세로 여백(거터)을 찾아 다단(2단 이상)

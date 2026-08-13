@@ -24,7 +24,7 @@
   - [HTML 도서 빌드](#html-도서-빌드)
   - [PDF 빌드 — 개별/병합](#pdf-빌드--개별병합)
   - [HTML 편집](#html-편집)
-  - [PDF 임포트 — import pdf](#pdf-임포트--import-pdf)
+  - [PDF 임포트 — import](#pdf-임포트--import)
   - [로컬 LLM 번역 — translate](#로컬-llm-번역--translate)
 - [3. 설치 가이드](#3-설치-가이드)
 - [알려진 한계](#알려진-한계)
@@ -48,10 +48,10 @@ MDBook-binder는 **임의의 마크다운 파일 모음(코퍼스)을 입력으�
 3. **HTML 도서 편집기** — 생성된 HTML 도서를 브라우저에서 섹션 단위로 다시
    열어 마크다운·이미지를 편집할 수 있는 웹 편집기.
 
-코퍼스가 아직 없다면 영문 PDF에서 시작할 수도 있다: `import pdf`로 PDF를
+코퍼스가 아직 없다면 영문 PDF에서 시작할 수도 있다: `import`로 PDF를
 마크다운 코퍼스로 추출하고, `translate`로 로컬 Ollama LLM을 이용해 토큰
 비용 없이 한국어로 번역한 뒤, 위 세 가지 명령으로 바로 이어받는다([PDF
-임포트](#pdf-임포트--import-pdf), [번역](#로컬-llm-번역--translate) 참고).
+임포트](#pdf-임포트--import), [번역](#로컬-llm-번역--translate) 참고).
 
 코퍼스가 `book.yaml`로 순서·제목·콜아웃 마커 등을 명시하면 그대로 따르고,
 없으면 파일/디렉토리 명명 규칙이나 디렉토리 트리 자연정렬로 순서를 자동
@@ -415,13 +415,17 @@ mdbook-binder edit <html_경로> [--port 5757] [--out edited.html] [--no-browser
 교체, 이미지 업로드/갤러리를 제공한다. `<section id="{slug}">` 구조에만
 의존하므로 어떤 코퍼스로 만든 HTML이든 동일하게 동작한다.
 
-### PDF 임포트 — import pdf
+### PDF 임포트 — import
 
 ```bash
-mdbook-binder import pdf <PDF_경로> <출력_디렉토리> [--title TEXT] [--no-images]
+mdbook-binder import <PDF_경로> <출력_디렉토리> [--title TEXT] [--no-images]
 ```
 
 `pip install "mdbook-binder[pdf]"`(pdfplumber/pypdf/pillow)가 필요하다.
+지원 포맷은 PDF뿐이다 — `.pdf`가 아닌 파일을 주면 바로 에러로 안내한다.
+docx 등 다른 포맷 문서는 PDF로 변환(워드프로세서의 "PDF로 저장" 등)한
+뒤 이 명령에 넣으면 된다 — 별도 포맷별 변환기를 두지 않기로 한 의도적
+설계다.
 
 **옵션**
 
@@ -571,7 +575,7 @@ mdbook-binder build pdf ~/Docs/my-book --merge      # 4. (선택) 단권 PDF
 기본 모델 `exaone3.5:7.8b`):
 
 ```bash
-mdbook-binder import pdf ~/book.pdf ~/corpus-en
+mdbook-binder import ~/book.pdf ~/corpus-en
 mdbook-binder translate ~/corpus-en ~/corpus-ko --direction e2k
 mdbook-binder build html ~/corpus-ko
 ```
@@ -613,7 +617,7 @@ ruff check src tests
   순수 함수·API·이미지 임베드 로직은 `test_pdf_book.py`/`test_server.py`/
   `test_editor.py`로 고정돼 있지만, 실제 브라우저로 렌더링하는
   `convert_one`은 수동 검증만 거쳤다.
-- **`import pdf`는 챕터 자동 분리를 지원하지 않는다**: PDF 전체를 파일
+- **`import`는 챕터 자동 분리를 지원하지 않는다**: PDF 전체를 파일
   하나로 추출한다(Part/Chapter 명명 규칙에 맞춘 자동 분할은 아직 없음).
   텍스트 레이어가 없는 스캔 PDF도 지원하지 않는다 — OCR 기능은 없다.
   복잡한 다단 표(예: 병합 셀이 있는 평가표)는 표로 인식되지 못하고
@@ -628,6 +632,18 @@ ruff check src tests
 ---
 
 ## 변경이력
+
+### 0.4.1 (2026-08-13) — Breaking: `import pdf` → `import`
+
+- **breaking**: `import pdf <PDF_PATH> <OUT_DIR>` 서브커맨드 그룹을 없애고
+  `import <PDF_PATH> <OUT_DIR>` 최상위 명령으로 평탄화했다 — 지원 포맷을
+  PDF로 한정하기로 결정하면서(docx 등은 PDF로 변환 후 사용) 향후 다른
+  포맷 확장을 염두에 둔 그룹 구조를 유지할 이유가 없어졌다. 기존
+  `mdbook-binder import pdf ...`로 작성된 스크립트는
+  `mdbook-binder import ...`로 바꿔야 한다.
+- **feat**: `import`에 `.pdf` 확장자 검증을 추가했다 — PDF가 아닌 파일을
+  주면 즉시 안내 메시지로 실패한다(이전에는 pdfplumber의 원시 예외가
+  그대로 노출됐다).
 
 ### 0.4.0 (2026-08-13)
 
