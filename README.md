@@ -137,7 +137,7 @@ MDBook-binder/
     ├── test_mermaid_wrap.py      # 라벨 자동 줄바꿈 (12건)
     ├── test_theme.py             # 색상 테마 프리셋 + book.yaml/--color 연동 (8건)
     ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 (20건)
-    ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 순수 함수 + 통합 (64건)
+    ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 순수 함수 + 통합 (71건)
     ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭 (27건)
     └── test_server.py            # 웹 에디터 Flask API (12건)
 ```
@@ -543,7 +543,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 188개 테스트 (manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 64 + translation 27 + server 12)
+pytest tests/ -q      # 195개 테스트 (manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 71 + translation 27 + server 12)
 ruff check src tests
 ```
 
@@ -606,8 +606,15 @@ ruff check src tests
   매칭해 사전 점검은 통과하고 실제 번역만 404로 실패하던 불일치 수정.
 - **fix**: 모든 명령어 도움말에서 한글이 실제로는 터미널 2칸을 차지하는데
   1칸으로 계산되던 오류로 좁은 터미널에서 줄바꿈이 깨지던 문제 수정,
-  설명 전반을 핵심 위주로 축약.
-- 회귀 테스트 104건 추가(총 188개).
+  설명 전반을 핵심 위주로 축약. 각 명령어 인자(ARGS)에 대한 설명도 추가.
+- **fix**: `import pdf` 결과물에서 PDF 원문의 "#1)" 같은 순번 표기가
+  python-markdown에 의해 `<h1>`로 오인식되던 문제, 여러 불릿(●)이나
+  순번 표기가 한 물리적 줄에 뭉쳐 나오던 문제 수정.
+- **fix**: 웹 에디터(`edit`)가 Tailwind CSS·EasyMDE 등을 전부 CDN에서
+  불러오게 돼 있어 CDN이 막힌 환경(사내망/오프라인)에서 초기화 중 멈춰
+  화면이 비어 보이던 문제 수정 — HTML/PDF 빌더처럼 필요한 라이브러리를
+  전부 로컬에 번들해 완전 오프라인에서도 동작하게 했다.
+- 회귀 테스트 111건 추가(총 195개).
 
 ### 0.3.7 (2026-08-05)
 
