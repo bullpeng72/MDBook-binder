@@ -283,6 +283,9 @@ README가 바뀌면 함께 갱신한다.
 mdbook-binder check ~/Docs/my-book
 ```
 
+`ROOT`(마크다운 코퍼스 루트 디렉토리) 외 별도 옵션은 없다 — 실제로 HTML을
+렌더링하지 않고 원본 마크다운만 훑으므로 옵션을 최소화했다.
+
 ```
 순서 해석: 2순위: Part/Chapter 명명 규칙 감지
 챕터 수: 44개
@@ -308,18 +311,29 @@ mdbook-binder check ~/Docs/my-book
 mdbook-binder build html <코퍼스_루트> [--out out.html] [--title ...] [--language ko|en] [--color NAME]
 ```
 
+**옵션**
+
+| 옵션 | 설명 | 기본값 |
+|---|---|---|
+| `ROOT` (필수) | 마크다운 코퍼스 루트 디렉토리 | — |
+| `--out PATH` | 출력 HTML 경로 | `ROOT/<제목을 슬러그화한 이름>.html` |
+| `--title TEXT` | 도서 제목 오버라이드 | `book.yaml`의 `title`, 그것도 없으면 `ROOT` 디렉토리 이름 |
+| `--language TEXT` | 검색창 문구 등 UI 로케일 오버라이드. `ko`/`en` 문자열만 준비돼 있어 그 외 값을 주면 UI 문구는 `ko`로 폴백하지만 `<html lang>` 속성에는 입력값이 그대로 쓰인다 | `book.yaml`의 `language`, 그것도 없으면 `ko` |
+| `--color [blue\|gray\|green\|orange\|purple\|red\|teal]` | 사이드바/제목 강조색 테마 | `book.yaml`의 `color`, 그것도 없으면 `purple` |
+
+**동작**
+
 - 이미지를 base64 data URI로 인라인 임베드 — 이미지 폴더 없이도 단일 파일로
   완전히 독립적으로 열린다(다른 PC로 옮기거나 이메일 첨부해도 그대로 열림).
 - Mermaid 다이어그램은 Playwright/Chromium이 설치돼 있으면(`[pdf]` extra)
   빌드 시점에 정적 SVG로 미리 렌더링해 그대로 삽입한다 — 열람 시 CDN
   mermaid.js가 필요 없어져 완전한 오프라인 단일 파일이 된다. Playwright가
   없으면 조용히 원본 마크업으로 폴백해 기존처럼 열람 시 CDN에서 렌더링한다.
+  (코드 하이라이트·웹폰트는 아직 CDN 의존적 — [알려진 한계](#알려진-한계) 참고)
 - 인페이지 전문 검색(하이라이트·이전/다음 이동), 사이드바 목차 자동 생성.
 - 서로 다른 Part의 챕터 제목이 우연히 같아도(예: "개요") 섹션 id 충돌을
   자동으로 회피한다.
 - 빌드 끝에 누락된 이미지 참조를 한 번에 모아 요약 출력한다.
-- `--color`로 사이드바/제목 강조색 테마를 고른다(`purple`(기본)/`blue`/
-  `green`/`teal`/`red`/`orange`/`gray`) — book.yaml의 `color:`보다 우선한다.
 
 ### PDF 빌드 — 개별/병합
 
