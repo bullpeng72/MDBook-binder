@@ -15,6 +15,7 @@ from mdbook_binder.translation import (
     chunk_paragraphs,
     protect_blocks,
     reassemble_chunks,
+    resolve_model_name,
     restore_blocks,
     translate_chapter,
     translate_corpus,
@@ -199,3 +200,24 @@ def test_build_prompt_instructs_markdown_preservation_and_includes_chunk():
     prompt = _build_prompt("hello world", "ko")
     assert "hello world" in prompt
     assert "Markdown" in prompt
+
+
+class TestResolveModelName:
+    def test_exact_match_preferred(self):
+        assert resolve_model_name("qwen3.6:35b", ["qwen3.6:35b", "qwen3.6:35b-mlx"]) == "qwen3.6:35b"
+
+    def test_falls_back_to_base_name_match(self):
+        """회귀 대상: check_ollama()는 베이스 이름이 같으면 "설치됨"으로
+        판정하는데, 실제 generate() 호출은 요청한 이름을 그대로 써서 서버에
+        없는 태그라 404로 실패했다 — 실사용 중 재현된 버그. 두 곳이 반드시
+        같은 이름을 골라야 한다."""
+        assert resolve_model_name("qwen3.6:35b", ["qwen3.6:35b-mlx"]) == "qwen3.6:35b-mlx"
+
+    def test_no_match_returns_none(self):
+        assert resolve_model_name("qwen3.6:35b", ["llama3:8b"]) is None
+
+    def test_empty_available_list_returns_none(self):
+        assert resolve_model_name("qwen3.6:35b", []) is None
+
+    def test_first_base_name_match_used_when_multiple_candidates(self):
+        assert resolve_model_name("qwen3.6:35b", ["qwen3.6:7b", "qwen3.6:35b-mlx"]) == "qwen3.6:7b"

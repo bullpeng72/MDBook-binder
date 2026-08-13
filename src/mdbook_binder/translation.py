@@ -192,17 +192,50 @@ def _build_prompt(chunk: str, target_language: str) -> str:
     )
 
 
+def resolve_model_name(requested: str, available: list[str]) -> str | None:
+    """요청한 모델명이 실제 설치된 모델 중 무엇에 해당하는지 찾는다(순수 함수).
+
+    Ollama 서버가 돌려주는 모델 이름은 버전/빌드에 따라 태그(:)가 다를 수
+    있다(예: book.yaml엔 "qwen3.6:35b"라고 적어도 서버엔 "qwen3.6:35b-mlx"만
+    있는 경우 — 실사용 중 확인된 사례). 정확히 일치하는 이름이 있으면
+    그것을 우선하고, 없으면 태그 앞 베이스 이름이 같은 첫 항목으로 완화
+    매칭한다. check_ollama()의 "설치 여부 판정"과 make_ollama_translate_fn()의
+    "실제 generate() 호출에 쓸 이름 결정"이 반드시 같은 매칭 규칙을 써야
+    한다 — 그러지 않으면 점검은 통과했는데 실제 호출은 서버가 모르는
+    이름이라 404로 실패하는 불일치가 생긴다(실사용 중 재현된 버그).
+    """
+    if requested in available:
+        return requested
+    base_name = requested.split(":")[0]
+    for name in available:
+        if name.split(":")[0] == base_name:
+            return name
+    return None
+
+
 def make_ollama_translate_fn(cfg: TranslationConfig, target_language: str) -> Callable[[str], str]:
     """실제 Ollama 클라이언트를 감싼 translate_fn을 만든다 — 이 모듈에서
     `import ollama`가 일어나는 유일한 지점이다(지연 임포트라 translation.py
     자체는 ollama 미설치 상태에서도 임포트 가능하다 — 호출 시에만 필요).
+
+    cfg.model을 그대로 generate()에 넘기지 않고 resolve_model_name()으로
+    실제 서버에 있는 정확한 이름으로 바꿔 쓴다 — check_ollama()가 "완화
+    매칭으로 뭔가는 설치돼 있다"고 판정해 사전 점검을 통과시켜놓고, 정작
+    호출은 서버에 없는 이름 그대로 나가 404로 실패하는 불일치를 막는다.
     """
     from ollama import Client
 
     client = Client(host=cfg.host, timeout=cfg.timeout)
+    available = [m.model for m in client.list().models]
+    resolved_model = resolve_model_name(cfg.model, available)
+    if resolved_model is None:
+        available_desc = ", ".join(available) if available else "없음"
+        raise RuntimeError(f"Ollama 모델을 찾을 수 없습니다: {cfg.model!r} (설치된 모델: {available_desc})")
+    if resolved_model != cfg.model:
+        print(f"  ℹ️  요청한 모델 '{cfg.model}'을 찾지 못해 '{resolved_model}'을 대신 씁니다")
 
     def _translate(chunk: str) -> str:
-        response = client.generate(model=cfg.model, prompt=_build_prompt(chunk, target_language))
+        response = client.generate(model=resolved_model, prompt=_build_prompt(chunk, target_language))
         return response.response.strip()
 
     return _translate

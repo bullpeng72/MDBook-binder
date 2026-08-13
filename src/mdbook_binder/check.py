@@ -169,6 +169,8 @@ def check_ollama(config: BookConfig | None) -> EnvCheckItem:
     except ImportError:
         return EnvCheckItem(feature, False, pkg_hint)
 
+    from mdbook_binder.translation import resolve_model_name
+
     cfg = config.translation if (config and config.translation) else TranslationConfig()
     try:
         client = Client(host=cfg.host, timeout=cfg.timeout)
@@ -178,13 +180,12 @@ def check_ollama(config: BookConfig | None) -> EnvCheckItem:
             feature, False, f"Ollama 서버 연결 실패({cfg.host}) — 서버가 실행 중인지 확인: {exc}"
         )
 
-    # ollama list()가 돌려주는 모델 이름(.model)은 서버/모델에 따라 태그(:)
-    # 포함/미포함이 갈릴 수 있어, book.yaml에 "qwen3.6:35b"처럼 태그를 적어도
-    # 태그 없는 축약 이름과 매치되게 완화 비교한다 — 정확 일치만 하면 실제로는
-    # 설치돼 있는데 "미설치"로 오탐하는 경우가 생긴다.
-    model_names = {m.model for m in models_resp.models}
-    base_name = cfg.model.split(":")[0]
-    if not any(name == cfg.model or name.split(":")[0] == base_name for name in model_names):
+    # make_ollama_translate_fn()이 실제 generate() 호출에 쓸 이름을 고르는
+    # 것과 반드시 같은 규칙(resolve_model_name)을 써야 한다 — 그러지 않으면
+    # 여기선 "설치됨"으로 통과시켜놓고 실제 호출은 서버에 없는 이름 그대로
+    # 나가 404로 실패하는 불일치가 생긴다(실사용 중 재현된 버그).
+    model_names = [m.model for m in models_resp.models]
+    if resolve_model_name(cfg.model, model_names) is None:
         return EnvCheckItem(feature, False, f"ollama pull {cfg.model}")
 
     return EnvCheckItem(feature, True)
