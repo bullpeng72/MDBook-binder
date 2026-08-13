@@ -139,6 +139,10 @@ function initMDE() {
     element: document.getElementById('mde-editor'),
     autofocus: false,
     spellChecker: false,
+    // index.html이 이미 로컬 번들 Font Awesome을 로드한다 — 끄지 않으면
+    // EasyMDE가 href로 판별을 못 해 CDN에서 또 하나를 주입하려 시도한다
+    // (CDN 차단 환경에서 실패 요청만 남고, 오프라인 목표에도 어긋난다).
+    autoDownloadFontAwesome: false,
     toolbar: [
       'bold', 'italic', 'heading', '|',
       'unordered-list', 'ordered-list', '|',

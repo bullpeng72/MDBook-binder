@@ -5,18 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Book-binder 편집기 — {{ filename }}</title>
 
-  <!-- Tailwind CSS -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- 전부 templates/vendor/에 로컬로 번들돼 있다(CDN 미사용) — CDN이 막힌
+       네트워크(사내망/오프라인/광고차단기)에서 편집기 자체가 초기화 중간에
+       멈춰버리는 문제가 있었다(EasyMDE 등이 정의되지 않아 DOMContentLoaded
+       핸들러가 예외로 중단됨, 실사용 환경에서 재현·확인됨). -->
 
-  <!-- EasyMDE -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.css">
-  <script src="https://cdn.jsdelivr.net/npm/easymde/dist/easymde.min.js"></script>
+  <!-- Tailwind CSS -->
+  <script src="/vendor/tailwindcss.js"></script>
+
+  <!-- EasyMDE (+ 툴바 아이콘용 Font Awesome — editor.js의 autoDownloadFontAwesome:
+       false와 짝이다. 그러지 않으면 EasyMDE가 이 링크를 이미 로드했는지
+       href로 판별하지 못해 CDN에서 또 하나를 자체적으로 주입하려 든다) -->
+  <link rel="stylesheet" href="/vendor/easymde.min.css">
+  <link rel="stylesheet" href="/vendor/font-awesome.min.css">
+  <script src="/vendor/easymde.min.js"></script>
 
   <!-- Marked (Markdown → HTML preview) -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="/vendor/marked.min.js"></script>
 
   <!-- Mermaid (diagram preview & lightbox) -->
-  <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+  <script src="/vendor/mermaid.min.js"></script>
 
   <!-- HTML/PDF 빌드(mermaid_prerender.py)와 동일한 폰트·줄높이로 렌더링해, 여기서
        미리 본 다이어그램의 라벨 크기가 실제 빌드 결과와 어긋나지 않게 한다. -->

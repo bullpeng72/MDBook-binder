@@ -65,6 +65,8 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 # templates/ 하위 CSS/JS/편집기 SPA는 .py가 아니라 setuptools가 기본으로
-# 담지 않는다 — html_book.py/pdf_book.py가 런타임에 이 파일들을 직접 읽으므로
-# 반드시 wheel/sdist에 포함해야 한다.
+# 담지 않는다 — html_book.py/pdf_book.py/editor/server.py가 런타임에 이
+# 파일들을 직접 읽거나 서빙하므로 반드시 wheel/sdist에 포함해야 한다.
+# templates/vendor/*(Tailwind/EasyMDE/marked/mermaid)는 CDN 대신 로컬
+# 번들로 서빙해 편집기가 오프라인/CDN 차단 환경에서도 동작하게 한다.
 mdbook_binder = ["templates/*", "templates/editor/*", "templates/vendor/*"]

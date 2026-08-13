@@ -16,7 +16,7 @@ import threading
 import uuid
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, jsonify, request, send_file, send_from_directory
 
 from mdbook_binder.editor.html_editor import BookHTMLEditor
 from mdbook_binder.editor.image_editor import ImageEditor
@@ -27,6 +27,9 @@ logger = logging.getLogger("mdbook_binder.editor")
 _ALLOWED_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 _TEMPLATE_DIR = Path(__file__).parent.parent / "templates" / "editor"
 _INDEX_TEMPLATE = _TEMPLATE_DIR / "index.html"
+# Tailwind/EasyMDE/marked/mermaid를 CDN 대신 로컬로 번들해 서빙한다 —
+# CDN이 막힌 네트워크에서 편집기 초기화가 중간에 멈춰버리는 문제가 있었다.
+_VENDOR_DIR = _TEMPLATE_DIR.parent / "vendor"
 
 
 def create_app(html_path: str, output_path: str | None = None) -> Flask:
@@ -60,6 +63,10 @@ def create_app(html_path: str, output_path: str | None = None) -> Flask:
         return content.replace("{{ filename }}", filename).replace(
             "{{ mermaid_font_css }}", font_css
         )
+
+    @app.route("/vendor/<path:filename>")
+    def vendor(filename: str):
+        return send_from_directory(_VENDOR_DIR, filename)
 
     # ------------------------------------------------------------------ #
     #  Book meta

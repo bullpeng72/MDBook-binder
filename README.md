@@ -126,7 +126,7 @@ MDBook-binder/
 │       ├── html_book.css/js    # HTML 도서 사이드바·검색·mermaid
 │       ├── pdf_override.css    # PDF 전용 레이아웃 오버라이드(CSS)
 │       ├── pdf_book.js         # PDF 렌더링 보정(Mermaid 크기 측정·청크 분할)
-│       ├── vendor/              # 번들된 mermaid.min.js + Noto Sans KR 폰트(오프라인 렌더링용)
+│       ├── vendor/              # 번들: mermaid.min.js·Noto Sans KR 폰트·Tailwind·EasyMDE·Font Awesome·marked.js(오프라인용)
 │       └── editor/              # 편집 SPA (index.html/editor.css/editor.js)
 └── tests/
     ├── test_manifest.py          # 3단계 순서 해석 (12건)
@@ -561,8 +561,10 @@ ruff check src tests
   처리돼 있다.
 - **패키지 설치 용량이 크다**: Mermaid를 네트워크 없이도 렌더링하려고
   `mermaid.min.js`(~3.3MB)와 한글 라벨용 `NotoSansKR-Regular.woff2`
-  (~2.1MB)를 번들했다(합계 ~5.4MB) — `pip install` 1회 용량에만 영향,
-  생성되는 HTML 파일 크기와는 무관하다.
+  (~2.1MB)를 번들했고, 웹 에디터(`edit`)도 CDN이 막힌 환경에서 먹통이
+  되지 않도록 Tailwind CSS·EasyMDE·Font Awesome·marked.js(합계 ~1MB)를 같은
+  방식으로 번들했다(전체 합계 ~6.1MB) — `pip install` 1회 용량에만 영향, 생성되는
+  HTML 파일 크기와는 무관하다.
 - **부분 빌드 미지원**: 파일/패턴을 지정한 일부 챕터만 빌드하는 기능은
   없다 — 항상 코퍼스 전체를 대상으로 한다.
 - **마크다운 스캐폴딩 미포함**: 정형 스텁 생성 없이 저작은 사용자 몫이다
