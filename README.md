@@ -24,6 +24,8 @@
   - [HTML 도서 빌드](#html-도서-빌드)
   - [PDF 빌드 — 개별/병합](#pdf-빌드--개별병합)
   - [HTML 편집](#html-편집)
+  - [PDF 임포트 — import pdf](#pdf-임포트--import-pdf)
+  - [로컬 LLM 번역 — translate](#로컬-llm-번역--translate)
 - [3. 설치 가이드](#3-설치-가이드)
 - [알려진 한계](#알려진-한계)
 - [변경이력](#변경이력)
@@ -45,6 +47,11 @@ MDBook-binder는 **임의의 마크다운 파일 모음(코퍼스)을 입력으�
 2. **PDF 도서** — 챕터별 개별 PDF 또는 한 권으로 병합(merge)한 PDF.
 3. **HTML 도서 편집기** — 생성된 HTML 도서를 브라우저에서 섹션 단위로 다시
    열어 마크다운·이미지를 편집할 수 있는 웹 편집기.
+
+코퍼스가 아직 없다면 영문 PDF에서 시작할 수도 있다: `import pdf`로 PDF를
+마크다운 코퍼스로 추출하고, `translate`로 로컬 Ollama LLM을 이용해 토큰
+비용 없이 한국어로 번역한 뒤, 위 세 가지 명령으로 바로 이어받는다([PDF
+임포트](#pdf-임포트--import-pdf), [번역](#로컬-llm-번역--translate) 참고).
 
 코퍼스가 `book.yaml`로 순서·제목·콜아웃 마커 등을 명시하면 그대로 따르고,
 없으면 파일/디렉토리 명명 규칙이나 디렉토리 트리 자연정렬로 순서를 자동
@@ -107,8 +114,10 @@ MDBook-binder/
 │   ├── mermaid_wrap.py       # Mermaid 노드/엣지 라벨 자동 줄바꿈
 │   ├── theme.py              # --color 색상 테마 프리셋 (사이드바/제목 강조색)
 │   ├── pdf_book.py           # PDF 빌더 (청크 캡처 + 개별/병합)
+│   ├── pdf_import.py         # PDF → 마크다운 코퍼스 추출 (컬럼/표/이미지 인식)
+│   ├── translation.py        # 로컬 Ollama 번역 (청크 분할, 코드/mermaid 보존)
 │   ├── check.py              # 빌드 전 사전 점검
-│   ├── cli.py                # mdbook-binder CLI (check/build html/build pdf/edit)
+│   ├── cli.py                # mdbook-binder CLI (check/build/edit/import/translate)
 │   ├── editor/                # Lecture_forge 포크 — lecture-forge 비의존
 │   │   ├── html_editor.py      # BookHTMLEditor — 섹션 CRUD, 이미지 추가(base64 임베드)
 │   │   ├── image_editor.py     # 이미지/다이어그램 편집, 이미지 교체(base64 임베드)
@@ -120,14 +129,16 @@ MDBook-binder/
 │       ├── vendor/              # 번들된 mermaid.min.js + Noto Sans KR 폰트(오프라인 렌더링용)
 │       └── editor/              # 편집 SPA (index.html/editor.css/editor.js)
 └── tests/
-    ├── test_manifest.py          # 3단계 순서 해석 (7건)
-    ├── test_html_book.py         # 섹션 id 충돌 회피·이미지 임베드·챕터 간 링크 재작성 (7건)
-    ├── test_check.py             # 사전 점검 + 설치 환경 점검 (10건)
+    ├── test_manifest.py          # 3단계 순서 해석 (12건)
+    ├── test_html_book.py         # 섹션 id 충돌 회피·이미지 임베드·챕터 간 링크 재작성 (12건)
+    ├── test_check.py             # 사전 점검 + 설치 환경 점검 (13건)
     ├── test_editor.py            # 이미지 추가/교체 후 base64 임베드 (2건)
     ├── test_mermaid_prerender.py # Mermaid 사전 렌더링 성공/폴백 (6건)
     ├── test_mermaid_wrap.py      # 라벨 자동 줄바꿈 (12건)
     ├── test_theme.py             # 색상 테마 프리셋 + book.yaml/--color 연동 (8건)
     ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 (20건)
+    ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 순수 함수 + 통합 (64건)
+    ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭 (27건)
     └── test_server.py            # 웹 에디터 Flask API (12건)
 ```
 
@@ -301,8 +312,11 @@ mdbook-binder check ~/Docs/my-book
   ⚠️  Mermaid 사전 렌더링 · PDF 빌드 (Playwright Chromium) — 미설치
       → python -m playwright install chromium
   ✅ PDF 병합 (pypdf)
+  ✅ PDF 임포트 컬럼/표 인식 (pdfplumber)
   ✅ 웹 에디터 (Flask)
-  ✅ 웹 에디터 이미지 처리 (Pillow)
+  ✅ 이미지 처리 (Pillow)
+  ⚠️  번역 (Ollama) — 미설치
+      → pip install "mdbook-binder[translate]"
 ```
 
 ### HTML 도서 빌드
@@ -364,6 +378,87 @@ mdbook-binder edit <html_경로> [--port 5757] [--out edited.html] [--no-browser
 교체, 이미지 업로드/갤러리를 제공한다. `<section id="{slug}">` 구조에만
 의존하므로 어떤 코퍼스로 만든 HTML이든 동일하게 동작한다.
 
+### PDF 임포트 — import pdf
+
+```bash
+mdbook-binder import pdf <PDF_경로> <출력_디렉토리> [--title TEXT] [--no-images]
+```
+
+`pip install "mdbook-binder[pdf]"`(pdfplumber/pypdf/pillow)가 필요하다.
+
+**옵션**
+
+| 옵션 | 설명 | 기본값 |
+|---|---|---|
+| `PDF_PATH` (필수) | 추출할 PDF 경로 | — |
+| `OUT_DIR` (필수) | 마크다운 코퍼스를 생성할 디렉토리 | — |
+| `--title TEXT` | 제목/파일명 오버라이드 | PDF 파일명 |
+| `--no-images` | 이미지 추출 없이 텍스트만 뽑는다 | 이미지 추출함 |
+
+**동작**
+
+- pdfplumber로 단어별 좌표를 읽어 다단(2단 이상) 레이아웃을 컬럼별로
+  위→아래 순서로 재조립하고, 표처럼 정렬된 줄은 마크다운 표로 재구성한다.
+- 문서마다 다른 불릿 글리프·단어 간격을 표본 조사해 자동 보정한다(예:
+  구두점 없는 커스텀 불릿 폰트, 좁은 자간으로 단어가 붙어버리는 문서).
+- 쪽번호로 추정되는, 페이지 여백에 홀로 있는 숫자를 위치 기반으로 제거한다.
+- 이미지는 기본적으로 `OUT_DIR/images/`에 저장하고 본문 흐름의 원래
+  위치에 마크다운 이미지 참조로 끼워 넣는다(`--no-images`로 끌 수 있음)
+  — 너무 작은 장식용 이미지와 여러 페이지에 반복되는 로고/아이콘은
+  자동으로 제외한다.
+- 전체 PDF를 파일 하나로 추출한다 — 챕터 자동 분리는 아직 지원하지
+  않는다. 결과는 그 자체로 `build html`/`build pdf`/`translate`가 바로
+  받는 유효한 코퍼스다(자연정렬 폴백이 단일 파일 코퍼스도 그대로 받는다).
+- 텍스트 레이어가 없는 스캔 PDF(이미지로만 구성된 PDF)는 지원하지
+  않는다 — OCR 기능은 없다.
+
+### 로컬 LLM 번역 — translate
+
+```bash
+mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e|e2k [--model ...] [--check-only]
+```
+
+`pip install "mdbook-binder[translate]"`(ollama 클라이언트)와, 로컬에서 실행
+중인 [Ollama](https://ollama.com) 서버·번역용으로 받아둔 모델이 필요하다.
+서버가 로컬에서 도는 한 API 토큰 비용은 들지 않는다.
+
+**옵션**
+
+| 옵션 | 설명 | 기본값 |
+|---|---|---|
+| `ROOT` (필수) | 번역할 마크다운 코퍼스 루트 | — |
+| `OUT_DIR` (필수) | 번역 결과를 미러링할 디렉토리 | — |
+| `--direction [k2e\|e2k]` (필수) | `k2e`: 한→영, `e2k`: 영→한 | — |
+| `--model TEXT` | Ollama 모델명 | `book.yaml`의 `translation.model`, 없으면 `exaone3.5:7.8b` |
+| `--host TEXT` | Ollama 서버 주소 | `book.yaml`의 `translation.host`, 없으면 `http://localhost:11434` |
+| `--timeout INTEGER` | 청크 1건당 번역 타임아웃(초) | `book.yaml`의 `translation.timeout`, 없으면 300 |
+| `--chunk-chars INTEGER` | 청크 최대 글자수 | `book.yaml`의 `translation.chunk_chars`, 없으면 2000 |
+| `--check-only` | 실제 번역 없이 Ollama 연결·모델 설치 상태만 확인 | — |
+
+**동작**
+
+- 코퍼스를 `build`와 동일한 3단계 순서 해석 규칙으로 걷어 챕터 순서대로
+  번역하고, `OUT_DIR`에 동일한 디렉토리 구조로 미러링한다(`exclude` 규칙도
+  그대로 적용된다).
+- 코드·Mermaid·raw-HTML 블록은 번역하지 않고 원문 그대로 보존한다.
+- `book.yaml`의 `language` 필드를 번역 방향에 맞춰(`k2e`→`en`, `e2k`→`ko`)
+  다시 써서 출력한다.
+- 청크 하나에도 수십 초가 걸릴 수 있어 챕터·청크 단위 진행 상황을
+  출력한다(`📄 [2/12] Chapter_02.md`, `청크 1/3 번역 중...`).
+- 모델이 없어도 자동으로 pull하지 않는다 — 직접 `ollama pull <모델>`을
+  실행해야 한다. `--check-only`로 실제 번역 전에 연결·모델 상태만 먼저
+  확인할 수 있다.
+
+`book.yaml`에 기본값을 지정해둘 수도 있다(CLI 옵션이 이 값보다 우선한다):
+
+```yaml
+translation:
+  model: exaone3.5:7.8b
+  host: http://localhost:11434
+  timeout: 300
+  chunk_chars: 2000
+```
+
 ---
 
 ## 3. 설치 가이드
@@ -396,7 +491,7 @@ mdbook-binder edit <html_경로> [--port 5757] [--out edited.html] [--no-browser
 
 ```bash
 pip install mdbook-binder                          # 코어만 — HTML 빌드/check/편집(수동 조합)
-pip install "mdbook-binder[pdf]"                    # + Playwright/pypdf (PDF 빌드용)
+pip install "mdbook-binder[pdf]"                    # + Playwright/pypdf/pdfplumber (PDF 빌드·임포트용)
 pip install "mdbook-binder[editor]"                 # + Flask/Pillow (웹 편집기용)
 pip install "mdbook-binder[translate]"              # + ollama 클라이언트 (로컬 LLM 번역용)
 pip install "mdbook-binder[pdf,editor,translate]"   # 전체 기능
@@ -416,11 +511,12 @@ git clone https://github.com/bullpeng72/MDBook-binder.git
 cd MDBook-binder
 python3 -m venv .venv && source .venv/bin/activate
 
-pip install -e .                    # 코어만 — HTML 빌드/check/편집(수동 조합)
-pip install -e ".[pdf]"             # + Playwright/pypdf (PDF 빌드용)
-pip install -e ".[editor]"          # + Flask/Pillow (웹 편집기용)
-pip install -e ".[dev]"             # + pytest/ruff (개발용)
-pip install -e ".[pdf,editor,dev]"  # 전체 기능
+pip install -e .                            # 코어만 — HTML 빌드/check/편집(수동 조합)
+pip install -e ".[pdf]"                     # + Playwright/pypdf/pdfplumber (PDF 빌드·임포트용)
+pip install -e ".[editor]"                  # + Flask/Pillow (웹 편집기용)
+pip install -e ".[translate]"               # + ollama 클라이언트 (로컬 LLM 번역용)
+pip install -e ".[dev]"                     # + pytest/ruff (개발용)
+pip install -e ".[pdf,editor,translate,dev]"  # 전체 기능
 
 python -m playwright install --with-deps chromium   # [pdf] 설치 시 1회
 ```
@@ -434,11 +530,20 @@ mdbook-binder edit out.html                        # 3. 브라우저에서 편�
 mdbook-binder build pdf ~/Docs/my-book --merge      # 4. (선택) 단권 PDF
 ```
 
+코퍼스가 아직 없고 영문 PDF만 있다면(로컬 LLM 번역, 토큰 비용 없음,
+기본 모델 `exaone3.5:7.8b`):
+
+```bash
+mdbook-binder import pdf ~/book.pdf ~/corpus-en
+mdbook-binder translate ~/corpus-en ~/corpus-ko --direction e2k
+mdbook-binder build html ~/corpus-ko
+```
+
 ### 개발
 
 ```bash
-pip install -e ".[dev,pdf,editor]"
-pytest tests/ -q      # 128개 테스트 (manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 9 + translation 22 + server 12)
+pip install -e ".[dev,pdf,editor,translate]"
+pytest tests/ -q      # 188개 테스트 (manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 64 + translation 27 + server 12)
 ruff check src tests
 ```
 
@@ -469,6 +574,14 @@ ruff check src tests
   순수 함수·API·이미지 임베드 로직은 `test_pdf_book.py`/`test_server.py`/
   `test_editor.py`로 고정돼 있지만, 실제 브라우저로 렌더링하는
   `convert_one`은 수동 검증만 거쳤다.
+- **`import pdf`는 챕터 자동 분리를 지원하지 않는다**: PDF 전체를 파일
+  하나로 추출한다(Part/Chapter 명명 규칙에 맞춘 자동 분할은 아직 없음).
+  텍스트 레이어가 없는 스캔 PDF도 지원하지 않는다 — OCR 기능은 없다.
+  복잡한 다단 표(예: 병합 셀이 있는 평가표)는 표로 인식되지 못하고
+  일반 문단으로 추출될 수 있다.
+- **`translate`는 로컬 Ollama 서버가 필수다**: 원격/클라우드 LLM API는
+  지원하지 않는다 — 항상 `localhost`(또는 지정한 host)에서 실행 중인
+  Ollama 서버와 미리 받아둔(`ollama pull`) 모델이 있어야 한다.
 - **최신 변경이력이 PyPI에는 아직 반영되지 않았을 수 있다**: PyPI는
   태그·릴리스된 버전까지만 따라간다 — 가장 최근 [변경이력](#변경이력)
   항목이 필요하면 저장소를 직접 클론해 설치한다.
@@ -476,6 +589,23 @@ ruff check src tests
 ---
 
 ## 변경이력
+
+### 0.4.0 (2026-08-13)
+
+- **feat**: `import pdf` 명령 추가 — pdfplumber로 컬럼/표/이미지 위치를
+  인식해 영문 PDF를 마크다운 코퍼스로 추출한다. 문서별 불릿 글리프·단어
+  간격 자동 보정, 쪽번호 제거, 이미지 추출(장식용/반복 로고 자동 제외)을
+  포함한다.
+- **feat**: `translate` 명령 추가 — 로컬 Ollama로 코퍼스를 번역한다(토큰
+  비용 없음). 코드/Mermaid/raw-HTML 블록은 보존하고, 챕터·청크 단위
+  진행 상황을 출력하며, `book.yaml`의 `translation:` 설정을 지원한다.
+  기본 모델은 `exaone3.5:7.8b`.
+- **fix**: `check`와 `translate`가 서로 다른 규칙으로 Ollama 모델명을
+  매칭해 사전 점검은 통과하고 실제 번역만 404로 실패하던 불일치 수정.
+- **fix**: 모든 명령어 도움말에서 한글이 실제로는 터미널 2칸을 차지하는데
+  1칸으로 계산되던 오류로 좁은 터미널에서 줄바꿈이 깨지던 문제 수정,
+  설명 전반을 핵심 위주로 축약.
+- 회귀 테스트 104건 추가(총 188개).
 
 ### 0.3.7 (2026-08-05)
 
