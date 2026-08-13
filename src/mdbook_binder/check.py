@@ -118,6 +118,7 @@ def check_environment(config: BookConfig | None = None) -> list[EnvCheckItem]:
     return [
         _check_playwright_chromium(),
         _check_module("PDF 병합 (pypdf)", "pypdf", 'pip install "mdbook-binder[pdf]"'),
+        _check_module("PDF 임포트 컬럼/표 인식 (pdfplumber)", "pdfplumber", 'pip install "mdbook-binder[pdf]"'),
         _check_module("웹 에디터 (Flask)", "flask", 'pip install "mdbook-binder[editor]"'),
         _check_module("웹 에디터 이미지 처리 (Pillow)", "PIL", 'pip install "mdbook-binder[editor]"'),
         check_ollama(config),

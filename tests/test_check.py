@@ -78,10 +78,10 @@ def test_check_module_reports_missing_with_hint():
     assert item.install_hint == 'pip install "mdbook-binder[pdf]"'
 
 
-def test_check_environment_returns_five_items(monkeypatch: pytest.MonkeyPatch):
+def test_check_environment_returns_six_items(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
     items = check_environment()
-    assert len(items) == 5
+    assert len(items) == 6
     assert all(isinstance(item, EnvCheckItem) for item in items)
 
 

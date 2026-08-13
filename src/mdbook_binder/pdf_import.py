@@ -1,5 +1,15 @@
 """영문 PDF → 단일 평면 마크다운 코퍼스 추출 — `mdbook-binder import pdf`.
 
+pdfplumber로 단어별 (x, y) 좌표를 직접 얻어 두 가지를 처리한다:
+- 컬럼 인식: 페이지를 가로지르는 세로 여백(거터)을 찾아 다단(2단 이상)
+  레이아웃을 감지하고, 각 컬럼을 위→아래로 다 읽은 뒤 다음 컬럼으로
+  넘어가는 올바른 순서로 재조립한다. pypdf의 layout 모드처럼 y좌표
+  대역만으로 줄을 합치면 같은 높이의 서로 다른 컬럼 텍스트가 한 줄에
+  섞여버린다(실사용 PDF로 재현된 문제).
+- 표 인식: 연속된 여러 줄이 동일한 x좌표 격자에 정렬돼 있으면 표로 보고
+  마크다운 파이프 표로 재구성한다. 산문은 줄마다 단어 시작 위치가 들쭉날쭉해
+  이 조건을 만족하지 않으므로 오탐 위험이 낮다.
+
 챕터 분리(Part_/Chapter_ 명명 규칙에 맞춘 자동 분할)와 이미지 추출은 Phase 1
 스코프 밖이다 — PDF 전체를 파일 하나로 뽑아낸다. 그래도 manifest.py의 3순위
 자연정렬 폴백이 단일 파일 코퍼스를 그대로 받아들이므로, 이 모듈의 산출물은
@@ -28,20 +38,265 @@ _HYPHEN_BREAK_RE = re.compile(r"\w-$")
 # 내보내는 경우까지는 다루지 않는다 — 그런 매핑은 문서마다 달라 일반화할
 # 수 없는 그 PDF 고유의 아티팩트다.
 _BULLET_MARKER_RE = re.compile(r"^(?:[•\-*◦‣]|\d+[.)]|[a-zA-Z][.)])\s")
+# _process_page()가 만든 마크다운 표의 행 — 그대로 보존해야 하므로 하드랩
+# 해제/불릿 분리 로직을 타지 않게 clean_paragraphs()에서 별도 취급한다.
+_TABLE_ROW_RE = re.compile(r"^\|.*\|$")
+
+
+def _group_into_rows(words: list[dict], y_tolerance: float = 3.0) -> list[list[dict]]:
+    """단어를 y좌표(top) 기준으로 같은 줄끼리 묶는다(줄 안에서는 x좌표 순 정렬).
+
+    폰트 렌더링 오차로 같은 시각적 줄의 단어들이 완전히 같은 top값을 갖지
+    않을 수 있어 y_tolerance 안에 있으면 같은 줄로 취급한다.
+    """
+    if not words:
+        return []
+    ordered = sorted(words, key=lambda w: w["top"])
+    rows: list[list[dict]] = [[ordered[0]]]
+    row_top = ordered[0]["top"]
+    for w in ordered[1:]:
+        if abs(w["top"] - row_top) <= y_tolerance:
+            rows[-1].append(w)
+        else:
+            rows.append([w])
+            row_top = w["top"]
+    return [sorted(row, key=lambda w: w["x0"]) for row in rows]
+
+
+def detect_columns(
+    words: list[dict], *, min_gutter_frac: float = 0.02, margin_frac: float = 0.1
+) -> list[tuple[float, float]]:
+    """페이지 단어들의 x분포에서 컬럼 사이 거터(공백대)를 찾아 컬럼별 x범위를 반환한다(순수 함수).
+
+    페이지 폭을 잘게 나눈 x-구간마다 텍스트가 걸치는지 표시하고, 텍스트가
+    전혀 없는 구간이 min_gutter_frac 이상 폭으로 이어지면 컬럼 경계로 삼는다.
+    가장자리 여백(좌우 margin_frac 안쪽)에 생기는 공백은 진짜 컬럼 거터가
+    아니라 페이지 여백일 뿐이므로 거터 후보에서 제외한다. 거터를 하나도 못
+    찾으면 전체 단어 범위를 컬럼 하나로 반환한다(단일 컬럼 문서의 정상 동작 —
+    기존 pypdf 기반 추출과 동등하게 처리됨).
+    """
+    if not words:
+        return []
+
+    min_x = min(w["x0"] for w in words)
+    max_x = max(w["x1"] for w in words)
+    span = max_x - min_x
+    if span <= 0:
+        return [(min_x, max_x)]
+
+    bin_width = 2.0
+    n_bins = max(1, int(span / bin_width) + 1)
+    covered = [False] * n_bins
+    for w in words:
+        start_bin = max(0, int((w["x0"] - min_x) / bin_width))
+        end_bin = min(n_bins - 1, int((w["x1"] - min_x) / bin_width))
+        for b in range(start_bin, end_bin + 1):
+            covered[b] = True
+
+    # span 비례 폭(min_gutter_frac)만 쓰면, 페이지 폭 대부분을 못 채우는 좁은
+    # 컬럼(예: 짧은 문구 두 개짜리 슬라이드)에서 상대 임계값이 너무 작아져
+    # 평범한 단어 사이 공백(보통 6pt 미만)까지 거터로 오인할 수 있다 — 절대
+    # 최소 폭(15pt, 일반 단어 간격보다 뚜렷이 넓은 값)을 함께 강제한다.
+    absolute_min_pt = 15.0
+    gutter_min_bins = max(2, int(span * min_gutter_frac / bin_width), int(absolute_min_pt / bin_width))
+
+    gutters: list[float] = []
+    run_start: int | None = None
+    for i, is_covered in enumerate([*covered, True]):  # 끝에 sentinel을 붙여 마지막 run도 닫는다
+        if not is_covered:
+            if run_start is None:
+                run_start = i
+        elif run_start is not None:
+            gx0 = min_x + run_start * bin_width
+            gx1 = min_x + i * bin_width
+            frac = ((gx0 + gx1) / 2 - min_x) / span
+            if (i - run_start) >= gutter_min_bins and margin_frac < frac < (1 - margin_frac):
+                gutters.append((gx0 + gx1) / 2)
+            run_start = None
+
+    if not gutters:
+        return [(min_x, max_x)]
+
+    bounds = [min_x, *gutters, max_x]
+    return [(bounds[i], bounds[i + 1]) for i in range(len(bounds) - 1)]
+
+
+def _assign_to_column(word: dict, columns: list[tuple[float, float]]) -> int:
+    center = (word["x0"] + word["x1"]) / 2
+    for i, (cs, ce) in enumerate(columns):
+        if cs <= center <= ce:
+            return i
+    return min(range(len(columns)), key=lambda i: min(abs(center - columns[i][0]), abs(center - columns[i][1])))
+
+
+def _cluster_x_positions(xs: list[float], tolerance: float = 10.0) -> list[float]:
+    """비슷한 x좌표들을 하나의 대표값(평균)으로 묶는다(표의 열 위치 후보)."""
+    if not xs:
+        return []
+    ordered = sorted(xs)
+    clusters: list[list[float]] = [[ordered[0]]]
+    for x in ordered[1:]:
+        if x - clusters[-1][-1] <= tolerance:
+            clusters[-1].append(x)
+        else:
+            clusters.append([x])
+    return [sum(c) / len(c) for c in clusters]
+
+
+def _row_groups(row: list[dict], gap_threshold: float = 20.0) -> list[dict]:
+    """한 줄 안에서 단어들을 큰 간격(gap_threshold 이상) 기준으로 묶는다.
+
+    표는 셀 사이에 뚜렷한 여백이 있어 한 줄에 그룹이 여러 개(각 그룹이 표의
+    한 칸) 생기고, 산문은 단어 사이 간격이 일정하고 좁아 문장 전체가 그룹
+    하나로 뭉친다 — 표/산문을 구분하는 핵심 신호다(단어 x0를 문서 전체에서
+    무작정 클러스터링하면, 왼쪽 정렬된 산문도 매 줄이 같은 여백에서
+    시작한다는 이유만으로 표처럼 오인되기 쉽다 — 실제로 검증된 오탐).
+    """
+    if not row:
+        return []
+    groups: list[dict] = [{"x0": row[0]["x0"], "x1": row[0]["x1"]}]
+    for w in row[1:]:
+        if w["x0"] - groups[-1]["x1"] > gap_threshold:
+            groups.append({"x0": w["x0"], "x1": w["x1"]})
+        else:
+            groups[-1]["x1"] = w["x1"]
+    return groups
+
+
+def detect_table(
+    rows: list[list[dict]], *, min_rows: int = 3, min_cols: int = 3, gap_threshold: float = 20.0
+) -> tuple[int, int] | None:
+    """연속된 여러 줄이 동일한 칸(그룹) 위치에 정렬돼 있으면 표 영역을 찾는다(순수 함수).
+
+    각 줄을 _row_groups()로 나눈 뒤, 자체적으로 min_cols개 이상 칸을 가진
+    "표 행 후보"들의 칸 시작 위치만 모아 전역 열 위치를 구한다(산문 줄은
+    애초에 후보에서 제외되므로 전역 열 위치 계산 자체를 오염시키지 않는다).
+    그 열 위치와 min_cols개 이상 정렬되는 줄이 min_rows줄 이상 연속되는
+    가장 긴 구간을 (시작, 끝) 인덱스로 반환한다. 못 찾으면 None.
+
+    min_cols 기본값을 3으로 둔 이유: 진짜 2단 텍스트 레이아웃(본문이 좌/우
+    두 컬럼으로 흐르는 문서)도 매 줄이 정확히 2개 칸(좌/우 컬럼)으로 정렬돼
+    보여, min_cols=2였다면 2단 레이아웃과 열이 2개뿐인 표를 기하학적으로
+    구별할 수 없었다(실제로 검증된 오탐 — 2단 레이아웃 테스트 픽스처가 표로
+    오인됨). 대부분의 실제 표는 열이 3개 이상이라 이 값으로 2단 텍스트
+    오탐은 피하면서 흔한 표는 그대로 잡아낸다 — 다만 열이 정확히 2개인
+    표는 이 휴리스틱으로 감지하지 못하는 대가가 있다(알려진 한계).
+    """
+    if len(rows) < min_rows:
+        return None
+
+    row_groups_list = [_row_groups(row, gap_threshold) for row in rows]
+    candidate_starts = [g["x0"] for groups in row_groups_list if len(groups) >= min_cols for g in groups]
+    if not candidate_starts:
+        return None
+
+    global_columns = _cluster_x_positions(candidate_starts, tolerance=gap_threshold / 2)
+    if len(global_columns) < min_cols:
+        return None
+
+    def aligned_count(groups: list[dict]) -> int:
+        aligned: set[int] = set()
+        for g in groups:
+            for i, gc in enumerate(global_columns):
+                if abs(g["x0"] - gc) <= gap_threshold / 2:
+                    aligned.add(i)
+                    break
+        return len(aligned)
+
+    is_table_row = [aligned_count(groups) >= min_cols for groups in row_groups_list]
+
+    best: tuple[int, int] | None = None
+    start: int | None = None
+    for i, flag in enumerate([*is_table_row, False]):
+        if flag and start is None:
+            start = i
+        elif not flag and start is not None:
+            if i - start >= min_rows and (best is None or (i - start) > (best[1] - best[0])):
+                best = (start, i)
+            start = None
+    return best
+
+
+def _rows_to_table_markdown(rows: list[list[dict]], gap_threshold: float = 20.0) -> str:
+    """detect_table()이 찾은 표 영역(rows)을 마크다운 파이프 표로 렌더링한다."""
+    row_groups_list = [_row_groups(row, gap_threshold) for row in rows]
+    columns = _cluster_x_positions([g["x0"] for groups in row_groups_list for g in groups], tolerance=gap_threshold / 2)
+    n_cols = len(columns)
+
+    def cells_for(row: list[dict]) -> list[str]:
+        cells = [""] * n_cols
+        for w in row:
+            idx = min(range(n_cols), key=lambda i: abs(w["x0"] - columns[i]))
+            cells[idx] = f"{cells[idx]} {w['text']}".strip() if cells[idx] else w["text"]
+        return cells
+
+    table = [cells_for(row) for row in rows]
+    col_widths = [max(1, max(len(r[c]) for r in table)) for c in range(n_cols)]
+
+    def fmt(row: list[str]) -> str:
+        return "| " + " | ".join(cell.ljust(w) for cell, w in zip(row, col_widths)) + " |"
+
+    lines = [fmt(table[0]), "| " + " | ".join("-" * w for w in col_widths) + " |"]
+    lines.extend(fmt(r) for r in table[1:])
+    return "\n".join(lines)
+
+
+def _rows_to_text(rows: list[list[dict]]) -> str:
+    return "\n".join(" ".join(w["text"] for w in row) for row in rows)
+
+
+def _process_columns(words: list[dict]) -> str:
+    """표가 아닌 것으로 이미 확인된 단어들을 컬럼 인식해(읽기 순서 보정) 텍스트로 만든다."""
+    if not words:
+        return ""
+    columns = detect_columns(words)
+    buckets: list[list[dict]] = [[] for _ in columns]
+    for w in words:
+        buckets[_assign_to_column(w, columns)].append(w)
+    parts = [_rows_to_text(_group_into_rows(col_words)) for col_words in buckets]
+    return "\n\n".join(p for p in parts if p)
+
+
+def _process_page(words: list[dict]) -> str:
+    """한 페이지의 단어들을 표 인식 + 컬럼 인식(읽기 순서 보정)을 거쳐 텍스트로 만든다.
+
+    표 인식을 컬럼 분리보다 먼저, 페이지 전체 단어를 대상으로 수행한다 —
+    순서가 반대면(컬럼부터 나누면) 열이 3개 이상인 진짜 표가 컬럼 3개짜리
+    텍스트 레이아웃으로 쪼개져 표로 인식될 기회 자체가 사라진다(실제로
+    검증된 회귀). 표 영역을 찾으면 그 앞/뒤 나머지만 컬럼 인식으로 넘긴다 —
+    표 영역이 우연히 2단 레이아웃처럼 보이는 것까지 막을 필요는 없다
+    (detect_table()의 min_cols=3 기본값이 2단 텍스트와의 오탐을 이미 막는다).
+    """
+    if not words:
+        return ""
+
+    rows = _group_into_rows(words)
+    table_region = detect_table(rows)
+    if not table_region:
+        return _process_columns(words)
+
+    start, end = table_region
+    before_words = [w for row in rows[:start] for w in row]
+    after_words = [w for row in rows[end:] for w in row]
+    before = _process_columns(before_words)
+    table_md = _rows_to_table_markdown(rows[start:end])
+    after = _process_columns(after_words)
+    return "\n\n".join(p for p in (before, table_md, after) if p)
 
 
 def extract_pdf_text(pdf_path: Path) -> list[str]:
-    """pypdf(PdfReader)로 페이지별 텍스트를 추출한다(페이지 1개당 문자열 1개).
+    """pdfplumber로 페이지별 단어를 추출해 컬럼/표를 인식한 텍스트로 변환한다(페이지 1개당 문자열 1개).
 
-    기본 추출 모드는 슬라이드/프레젠테이션류 PDF에서 제목·불릿·푸터처럼
-    서로 다른 텍스트박스를 줄바꿈 없이 그대로 이어붙여버리는 경우가 흔하다
-    (실사용 PDF로 직접 확인된 문제). extraction_mode="layout"은 각 텍스트의
-    x/y 좌표를 이용해 실제 시각적 줄 위치를 재구성해 훨씬 안정적이다.
+    pypdf의 layout 모드는 슬라이드/프레젠테이션류 PDF의 줄바꿈은 잘 복원하지만
+    2단 이상 레이아웃에서는 같은 높이의 서로 다른 컬럼 텍스트를 한 줄에
+    섞어버린다(y좌표 대역만으로 줄을 재구성해 컬럼 개념이 없음 — 실사용
+    PDF로 재현·확인됨). pdfplumber로 단어 하나하나의 (x, y) 좌표를 직접 받아
+    detect_columns()/detect_table()로 재구성하면 이 문제를 피할 수 있다.
     """
-    from pypdf import PdfReader
+    import pdfplumber
 
-    reader = PdfReader(str(pdf_path))
-    return [page.extract_text(extraction_mode="layout") or "" for page in reader.pages]
+    with pdfplumber.open(str(pdf_path)) as pdf:
+        return [_process_page(page.extract_words()) for page in pdf.pages]
 
 
 def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list[str]:
@@ -72,6 +327,8 @@ def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list
 def clean_paragraphs(raw_text: str) -> str:
     """PDF 텍스트 추출 특유의 잡음을 정리해 마크다운 단락으로 되돌린다(순수 함수).
 
+    - 마크다운 표 행("| ... |")은 그대로 보존한다(연속된 행끼리는 빈 줄 없이
+      묶어 표 구조가 깨지지 않게 한다) — 하드랩 해제·불릿 분리 대상이 아니다.
     - 문장부호(.!?:)로 안 끝나는 줄은 다음 줄과 공백으로 합친다(하드랩 해제)
     - 새 불릿 마커(•/-/*/숫자./영문.)로 시작하는 줄은 그 앞에서 단락을 끊는다
       (이전 줄이 문장부호로 안 끝났어도)
@@ -84,20 +341,33 @@ def clean_paragraphs(raw_text: str) -> str:
     """
     paragraphs: list[str] = []
     current: list[str] = []
+    table_rows: list[str] = []
 
-    def flush() -> None:
+    def flush_prose() -> None:
         if current:
             paragraphs.append(" ".join(current))
             current.clear()
 
+    def flush_table() -> None:
+        if table_rows:
+            paragraphs.append("\n".join(table_rows))
+            table_rows.clear()
+
     for raw_line in raw_text.split("\n"):
         line = raw_line.strip()
         if not line:
-            flush()
+            flush_prose()
+            flush_table()
             continue
 
+        if _TABLE_ROW_RE.match(line):
+            flush_prose()
+            table_rows.append(line)
+            continue
+        flush_table()
+
         if _BULLET_MARKER_RE.match(line):
-            flush()
+            flush_prose()
             current.append(line)
         elif current and _HYPHEN_BREAK_RE.search(current[-1]) and line[:1].islower():
             current[-1] = current[-1][:-1] + line
@@ -105,9 +375,10 @@ def clean_paragraphs(raw_text: str) -> str:
             current.append(line)
 
         if _SENTENCE_END_RE.search(line):
-            flush()
+            flush_prose()
 
-    flush()
+    flush_prose()
+    flush_table()
     return "\n\n".join(paragraphs)
 
 
