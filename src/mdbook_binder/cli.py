@@ -19,7 +19,7 @@ from mdbook_binder.manifest import BookConfig
 from mdbook_binder.theme import THEMES
 
 _COLOR_CHOICE = click.Choice(sorted(THEMES), case_sensitive=False)
-_COLOR_HELP = "사이드바/제목 강조색 테마 (기본: book.yaml의 color 또는 purple)"
+_COLOR_HELP = "강조색 (기본: book.yaml color 또는 purple)"
 
 
 @click.group(
@@ -61,27 +61,17 @@ def main() -> None:
 def check_cmd(root: Path) -> None:
     """ROOT의 마크다운 코퍼스를 실제로 빌드하지 않고 미리 점검한다.
 
-    HTML/PDF를 만들지 않고 원본 마크다운만 훑으므로 큰 코퍼스에서도 즉시
-    끝난다(아래 세 가지). 이어서 선택 기능(extras)의 설치 상태를 점검하는데,
-    이쪽은 Playwright Chromium을 실제로 잠깐 띄워봐야 해서 몇 초 더 걸린다.
+    \b
+    확인 항목:
+    - 챕터 순서: book.yaml order → toc 매니페스트 → Part/Chapter 명명
+      규칙 → 자연정렬 중 무엇으로 정해졌는지와 최종 순서
+    - 중복 제목: 같은 h1 제목을 쓰는 챕터(HTML id에 -2, -3... 자동 부여됨)
+    - 누락 이미지: 마크다운이 참조하지만 실제로 없는 이미지 파일
+    - 선택 기능(extras): PDF 빌드·웹 에디터·번역에 필요한 패키지 설치 여부
 
     \b
-    - 순서 해석: book.yaml order → ```toc 매니페스트 → Part/Chapter 명명 규칙
-      → 자연정렬 폴백 중 어느 단계(1~3순위)가 챕터 순서를 확정했는지와, 그
-      결과 확정된 순서를 그대로 나열해 보여준다.
-    - 중복 제목: 서로 다른 파일이 같은 h1 제목을 쓰면 HTML 빌드 시 섹션
-      id에 "-2", "-3"...이 자동으로 붙는데, 그 대상을 미리 알려준다.
-    - 누락 이미지: 마크다운이 참조하는 이미지 파일이 실제로 없는 경우(오타
-      등)를 찾아낸다.
-
-    챕터로 잘못 분류된 문서(예: 집필 가이드용 .md)를 빌드 후 HTML을 열어보고
-    나서야 발견하는 일을 줄이기 위한 명령이다.
-
-    \b
-    마지막으로 PDF 빌드(Playwright Chromium)·웹 에디터(Flask/Pillow) 등
-    선택 기능(extras)의 설치 상태도 함께 점검해, 몇 분짜리 빌드를 끝까지
-    돌리고 나서야 "Playwright 브라우저 엔진이 설치되지 않았습니다" 같은
-    메시지를 보는 대신 미리 설치 명령을 안내받을 수 있다.
+    코퍼스 점검은 원본 마크다운만 훑어 즉시 끝나고, 선택 기능 점검은
+    Playwright Chromium을 잠깐 띄워봐야 해서 몇 초 더 걸린다.
     """
     from mdbook_binder.check import (
         check_corpus,
@@ -101,10 +91,10 @@ def check_cmd(root: Path) -> None:
 def build() -> None:
     """HTML 또는 PDF 도서를 빌드한다.
 
-    두 하위 명령 모두 book.yaml(있으면)과 3단계 순서 해석 규칙을 동일하게
-    공유한다 — 어느 쪽을 먼저 빌드하든 챕터 순서는 항상 같다. 순서가 의도한
-    대로 잡히는지 미심쩍으면 빌드 전에 `mdbook-binder check`로 먼저
-    확인한다.
+    \b
+    두 하위 명령 모두 book.yaml과 3단계 순서 해석 규칙을 공유한다 —
+    어느 쪽을 먼저 빌드하든 챕터 순서는 항상 같다. 순서가 미심쩍으면
+    빌드 전에 `mdbook-binder check`로 먼저 확인한다.
     """
 
 
@@ -113,26 +103,22 @@ def build() -> None:
     epilog="""\b
 예시:
   mdbook-binder build html ~/my-book
-  mdbook-binder build html ~/my-book --title "나의 책" --language en --color teal
-  mdbook-binder build html ~/my-book --out ./dist/book.html
+  mdbook-binder build html ~/my-book --title "나의 책" --language en
+  mdbook-binder build html ~/my-book --out ./dist/book.html --color teal
 """
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option(
     "--out", "out_path", type=click.Path(path_type=Path), default=None,
-    help="출력 HTML 경로 (기본: ROOT/<제목을 슬러그화한 이름>.html)",
+    help="출력 경로 (기본: ROOT/<제목 슬러그>.html)",
 )
 @click.option(
     "--title", "title_override", default=None,
-    help="도서 제목 오버라이드 (기본: book.yaml의 title, 그것도 없으면 ROOT 디렉토리 이름)",
+    help="도서 제목 (기본: book.yaml title/디렉토리명)",
 )
 @click.option(
     "--language", "language_override", default=None,
-    help=(
-        "검색창 문구 등 UI 로케일 오버라이드 (기본: book.yaml의 language, 그것도 없으면 ko). "
-        "ko/en 문자열만 준비돼 있어 그 외 값은 UI 문구는 ko로 폴백하지만 <html lang> "
-        "속성에는 입력값이 그대로 쓰인다"
-    ),
+    help="UI 로케일 (기본: book.yaml language 또는 ko)",
 )
 @click.option("--color", "color_override", type=_COLOR_CHOICE, default=None, help=_COLOR_HELP)
 def build_html_cmd(
@@ -144,11 +130,12 @@ def build_html_cmd(
 ) -> None:
     """ROOT 아래 마크다운 코퍼스를 검색 가능한 단일 HTML 도서로 빌드한다.
 
-    사이드바 목차와 인페이지 전문 검색을 갖추고, 이미지는 base64로 인라인
-    임베드되어 파일 하나만으로 열린다. Mermaid 다이어그램도 가능하면(Playwright/
-    Chromium이 설치돼 있으면) 빌드 시점에 정적 SVG로 사전 렌더링해 같이
-    임베드한다 — 없으면 열람 시 CDN mermaid.js로 폴백한다. 코드 하이라이트와
-    본문 웹폰트는 아직 CDN 의존적이다(README의 "알려진 한계" 참고).
+    \b
+    사이드바 목차·인페이지 전문 검색을 갖춘 단일 HTML 파일을 만든다
+    (이미지는 base64로 인라인 임베드). Mermaid 다이어그램은 가능하면
+    Playwright/Chromium으로 정적 SVG를 사전 렌더링해 같이 임베드하고,
+    없으면 CDN mermaid.js로 폴백한다. 코드 하이라이트·웹폰트는 아직
+    CDN 의존적이다.
     """
     from mdbook_binder.html_book import build_html
 
@@ -168,28 +155,20 @@ def build_html_cmd(
     "pdf",
     epilog="""\b
 예시:
-  mdbook-binder build pdf ~/my-book                  # 챕터별 개별 PDF (ROOT/pdf/ 아래)
-  mdbook-binder build pdf ~/my-book --merge           # 한 권으로 병합 → full_book.pdf
-  mdbook-binder build pdf ~/my-book --merge my_book   # 한 권으로 병합 → my_book.pdf
-  mdbook-binder build pdf ~/my-book --out-dir ./dist --color green
+  mdbook-binder build pdf ~/my-book                # 챕터별 PDF
+  mdbook-binder build pdf ~/my-book --merge         # 한 권으로 병합
+  mdbook-binder build pdf ~/my-book --merge my_book --out-dir ./dist
 """
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option(
     "--merge", "merge_out", is_flag=False, flag_value="full_book", default=None,
     metavar="[이름]",
-    help=(
-        "전체 챕터를 순서대로 한 권의 PDF로 병합한다(부분 병합은 미지원). "
-        "이름을 생략하면 full_book.pdf, 지정하면 <이름>.pdf로 저장되고 챕터·Part "
-        "북마크가 자동으로 붙는다. 생략하면 챕터별 개별 PDF를 만든다"
-    ),
+    help="한 권으로 병합 (기본 full_book.pdf)",
 )
 @click.option(
     "--out-dir", "out_dir", type=click.Path(path_type=Path), default=None,
-    help=(
-        "PDF 출력 디렉토리 (기본: ROOT/pdf). 개별 빌드는 이 아래에 코퍼스와 동일한 "
-        "디렉토리 구조로, 병합 빌드는 이 아래에 단일 파일로 저장된다"
-    ),
+    help="출력 디렉토리 (기본: ROOT/pdf)",
 )
 @click.option("--color", "color_override", type=_COLOR_CHOICE, default=None, help=_COLOR_HELP)
 def build_pdf_cmd(
@@ -197,11 +176,11 @@ def build_pdf_cmd(
 ) -> None:
     """ROOT 아래 마크다운을 챕터별 PDF(또는 --merge 시 단권)로 빌드한다.
 
-    각 챕터를 Playwright/Chromium으로 독립 렌더링한다 —
-    `pip install "mdbook-binder[pdf]"`와 `python -m playwright install
-    chromium` 설치가 먼저 필요하다(브라우저가 없으면 안내 메시지와 함께
-    실패한다). 긴 Mermaid 다이어그램은 실제 PDF 페이지 경계에 맞춰 청크로
-    나눠 스크린샷을 삽입해, 도형이 페이지 사이에서 잘리지 않게 한다.
+    \b
+    Playwright/Chromium으로 각 챕터를 렌더링한다 — `pip install
+    "mdbook-binder[pdf]"` 후 `python -m playwright install chromium`
+    설치가 먼저 필요하다. 긴 Mermaid 다이어그램은 페이지 경계에 맞춰
+    청크 스크린샷으로 나눠 삽입해 도형이 잘리지 않게 한다.
     """
     from mdbook_binder.pdf_book import build_pdf
 
@@ -218,26 +197,24 @@ def build_pdf_cmd(
 예시:
   mdbook-binder edit my-book.html
   mdbook-binder edit my-book.html --port 8080 --out final.html
-  mdbook-binder edit my-book.html --no-browser   # 서버만 띄우고 URL은 직접 열기
+  mdbook-binder edit my-book.html --no-browser   # URL 직접 열기
 """
 )
 @click.argument("html_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.option("--port", "-p", type=int, default=5757, help="에디터 서버가 열릴 로컬 포트 (기본: 5757)")
+@click.option("--port", "-p", type=int, default=5757, help="에디터 서버 포트 (기본: 5757)")
 @click.option(
     "--out", "out_path", type=click.Path(path_type=Path), default=None,
-    help=(
-        "브라우저에서 '저장'을 눌렀을 때 쓸 경로 (기본: <HTML_PATH의 stem>_edited.html). "
-        "저장 버튼을 누르기 전까지 원본 HTML_PATH는 전혀 수정되지 않는다"
-    ),
+    help="저장 경로 (기본: <stem>_edited.html, 원본 유지)",
 )
-@click.option("--no-browser", is_flag=True, default=False, help="서버만 띄우고 브라우저 자동 오픈은 생략한다")
+@click.option("--no-browser", is_flag=True, default=False, help="브라우저 자동 오픈 생략")
 def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool) -> None:
     """HTML_PATH를 브라우저 편집 UI로 연다.
 
-    `build html`이 만든 `<section id="...">` 구조에만 의존하므로 어떤
-    코퍼스로 만든 HTML이든 동일하게 동작한다. 섹션 단위 마크다운 편집,
-    이미지 추가/교체/삭제, Mermaid 다이어그램 삭제, 이미지 업로드·갤러리를
-    제공한다. `pip install "mdbook-binder[editor]"`(Flask/Pillow)가 필요하다.
+    \b
+    build html이 만든 <section> 구조에만 의존한다. 섹션 단위
+    마크다운 편집, 이미지 추가/교체/삭제, Mermaid 삭제, 이미지
+    업로드·갤러리를 제공한다. `pip install "mdbook-binder[editor]"`
+    (Flask/Pillow)가 필요하다.
     """
     from mdbook_binder.editor.server import run_editor
 
@@ -265,17 +242,18 @@ def import_group() -> None:
 )
 @click.argument("pdf_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("out_dir", type=click.Path(path_type=Path))
-@click.option("--title", "title_override", default=None, help="챕터 제목/파일명 오버라이드 (기본: PDF 파일명)")
-@click.option("--no-images", "no_images", is_flag=True, default=False, help="이미지를 추출하지 않고 텍스트만 뽑는다")
+@click.option("--title", "title_override", default=None, help="제목/파일명 오버라이드 (기본: PDF 파일명)")
+@click.option("--no-images", "no_images", is_flag=True, default=False, help="이미지 추출 없이 텍스트만 뽑는다")
 def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool) -> None:
-    """PDF_PATH(영문 PDF)를 단일 평면 마크다운 + book.yaml로 추출해 OUT_DIR에 만든다.
+    """PDF를 마크다운 코퍼스로 추출한다.
 
-    챕터 분리는 하지 않는다(전체를 파일 하나로) — Phase 2. 이미지는 기본적으로
-    OUT_DIR/images/에 저장하고 본문 흐름의 원래 위치에 맞춰 끼워 넣는다
-    (--no-images로 끌 수 있다) — 장식용 스페이서와 여러 페이지에 반복되는
-    로고/아이콘은 제외한다. 결과는 그 자체로 `mdbook-binder build html/pdf`나
-    `translate`가 바로 받는 유효한 코퍼스다(3순위 자연정렬 폴백이 단일 파일도
-    그대로 받는다).
+    \b
+    전체를 단일 파일로 추출한다(챕터 자동 분리는 아직 지원 안 함).
+    이미지는 기본적으로 OUT_DIR/images/에 저장되고 본문 흐름의
+    원래 위치에 삽입된다(--no-images로 끌 수 있음) — 너무 작은
+    장식용 이미지와 반복되는 로고/아이콘은 자동으로 제외한다.
+    결과는 그 자체로 build html/pdf나 translate가 바로 받는
+    유효한 코퍼스다.
     """
     from mdbook_binder.pdf_import import import_pdf
 
@@ -288,9 +266,9 @@ def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no
     "translate",
     epilog="""\b
 예시:
-  mdbook-binder translate ~/my-book ~/my-book-ko --direction e2k
-  mdbook-binder translate ~/my-book ~/my-book-en --direction k2e --model qwen3.6:35b-mlx
-  mdbook-binder translate ~/my-book ~/my-book-ko --direction e2k --check-only
+  mdbook-binder translate ~/book ~/book-ko --direction e2k
+  mdbook-binder translate ~/book ~/book-ko --direction e2k --check-only
+  mdbook-binder translate ~/book ~/book-en --direction k2e --model exaone3.5
 """
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
@@ -301,17 +279,17 @@ def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no
 )
 @click.option(
     "--model", "model_override", default=None,
-    help="Ollama 모델명 오버라이드 (기본: book.yaml의 translation.model, 그것도 없으면 exaone3.5:7.8b)",
+    help="Ollama 모델 (기본: exaone3.5:7.8b 또는 book.yaml)",
 )
 @click.option(
     "--host", "host_override", default=None,
-    help="Ollama 서버 host 오버라이드 (기본: book.yaml의 translation.host, 그것도 없으면 http://localhost:11434)",
+    help="Ollama 서버 (기본: localhost:11434 또는 book.yaml)",
 )
-@click.option("--timeout", "timeout_override", type=int, default=None, help="청크 1건당 번역 타임아웃(초) 오버라이드")
+@click.option("--timeout", "timeout_override", type=int, default=None, help="청크당 타임아웃(초) 오버라이드")
 @click.option("--chunk-chars", "chunk_chars_override", type=int, default=None, help="청크 최대 글자수 오버라이드")
 @click.option(
     "--check-only", is_flag=True, default=False,
-    help="실제 번역 없이 Ollama 연결·모델 설치 상태만 확인하고 종료한다",
+    help="번역 없이 Ollama 연결·모델 설치 상태만 확인",
 )
 def translate_cmd(
     root: Path,
@@ -325,13 +303,13 @@ def translate_cmd(
 ) -> None:
     """ROOT의 마크다운 코퍼스를 로컬 Ollama로 번역해 OUT_DIR에 미러링한다.
 
-    기본 모델은 exaone3.5:7.8b다(book.yaml의 translation.model 또는
-    --model로 오버라이드). manifest.resolve()로 챕터를 걷어(exclude/order
-    규칙 그대로 적용) 순서대로 번역하고, 코드/mermaid/raw-HTML 블록은
-    번역하지 않고 그대로 보존한다. book.yaml의 language 필드는 방향에
-    맞춰(k2e→en, e2k→ko) 재작성된다. 로컬 LLM 번역은 청크 하나에도 수십 초가
-    걸릴 수 있어 챕터·청크 단위 진행 상황을 출력한다. 모델이 없어도 자동으로
-    pull하지 않는다 — `ollama pull <모델>`을 직접 실행해야 한다.
+    \b
+    기본 모델은 exaone3.5:7.8b다(--model로 오버라이드 가능). 코드·
+    mermaid·raw-HTML 블록은 번역하지 않고 그대로 보존하고, book.yaml의
+    language 필드는 방향에 맞춰(k2e→en, e2k→ko) 다시 쓴다. 청크 하나에도
+    수십 초가 걸릴 수 있어 챕터·청크 단위 진행 상황을 출력한다. 모델이
+    없어도 자동으로 pull하지 않는다 — `ollama pull <모델>`을 직접
+    실행해야 한다.
     """
     from mdbook_binder.check import check_ollama
     from mdbook_binder.manifest import TranslationConfig
