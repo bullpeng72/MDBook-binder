@@ -10,6 +10,7 @@ from mdbook_binder.pdf_import import (
     clean_paragraphs,
     detect_columns,
     detect_table,
+    filter_garbled_words,
     import_pdf,
     strip_repeated_lines,
 )
@@ -194,6 +195,22 @@ class TestDetectColumns:
 
     def test_empty_words_returns_no_columns(self):
         assert detect_columns([]) == []
+
+
+class TestFilterGarbledWords:
+    def test_word_with_null_byte_is_removed(self):
+        """회귀 대상: 특정 PDF의 폰트 인코딩이 깨져(ToUnicode CMap 불량 등)
+        추출된 단어에 NUL 바이트가 글자 사이에 섞여 나온 사례 — 실사용 PDF로 확인."""
+        words = [_word("Hello", 72, 100), _word("e\x00n\x00g", 110, 100), _word("world", 150, 100)]
+        result = filter_garbled_words(words)
+        assert [w["text"] for w in result] == ["Hello", "world"]
+
+    def test_clean_words_all_kept(self):
+        words = [_word("Hello", 72, 100), _word("world", 110, 100)]
+        assert filter_garbled_words(words) == words
+
+    def test_empty_input_returns_empty_list(self):
+        assert filter_garbled_words([]) == []
 
 
 class TestDetectDocumentBulletChars:

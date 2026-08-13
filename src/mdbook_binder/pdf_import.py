@@ -50,6 +50,12 @@ _CANDIDATE_BULLET_RE = re.compile(r"^([A-Za-z])\s+\S")
 # 아무리 자주 반복돼도 불릿 후보에서 제외해야 오탐(멀쩡한 문장을 불릿으로
 # 오인)을 피한다.
 _COMMON_SINGLE_LETTER_WORDS = {"a", "i"}
+# 특정 PDF의 폰트 인코딩이 깨져 있으면(ToUnicode CMap 불량 등 — 2바이트
+# 문자를 1바이트씩 잘못 읽는 경우가 대표적) 추출된 단어에 NUL(\x00) 같은
+# 제어 문자가 글자 사이사이에 섞여 나온다(실사용 PDF로 확인됨). 원래 글자가
+# 무엇이었는지 PDF 자체에 정보가 없어 복원이 불가능하므로(OCR 없이는 불가),
+# filter_garbled_words()가 이런 단어를 조용히 걸러낸다.
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 # _process_page()가 만든 마크다운 표의 행 — 그대로 보존해야 하므로 하드랩
 # 해제/불릿 분리 로직을 타지 않게 clean_paragraphs()에서 별도 취급한다.
 _TABLE_ROW_RE = re.compile(r"^\|.*\|$")
@@ -321,6 +327,16 @@ def _process_page(words: list[dict]) -> str:
     return "\n\n".join(p for p in (before, table_md, after) if p)
 
 
+def filter_garbled_words(words: list[dict]) -> list[dict]:
+    """폰트 인코딩이 깨져 추출된 단어(제어 문자가 섞인 것)를 걸러낸다(순수 함수).
+
+    이런 단어는 원래 글자를 복원할 방법이 없으므로(_CONTROL_CHAR_RE 주석
+    참고), 남겨두면 본문 문장 앞뒤에 알아볼 수 없는 잡음으로만 남는다 —
+    조용히 제거하는 편이 낫다.
+    """
+    return [w for w in words if not _CONTROL_CHAR_RE.search(w["text"])]
+
+
 def extract_pdf_text(pdf_path: Path) -> list[str]:
     """pdfplumber로 페이지별 단어를 추출해 컬럼/표를 인식한 텍스트로 변환한다(페이지 1개당 문자열 1개).
 
@@ -333,7 +349,7 @@ def extract_pdf_text(pdf_path: Path) -> list[str]:
     import pdfplumber
 
     with pdfplumber.open(str(pdf_path)) as pdf:
-        return [_process_page(page.extract_words()) for page in pdf.pages]
+        return [_process_page(filter_garbled_words(page.extract_words())) for page in pdf.pages]
 
 
 def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list[str]:
