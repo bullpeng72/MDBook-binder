@@ -25,19 +25,18 @@ _COLOR_HELP = "사이드바/제목 강조색 테마 (기본: book.yaml의 color 
 @click.group(
     epilog="""\b
 빠른 시작:
-  mdbook-binder check ~/my-book               # 1. 빌드 전 순서·중복·누락 이미지·설치 환경 점검
-  mdbook-binder build html ~/my-book          # 2. 검색 가능한 단일 HTML 생성
-  mdbook-binder build pdf ~/my-book --merge   # 3. (선택) 한 권으로 병합한 PDF
-  mdbook-binder edit ~/my-book/my-book.html   # 4. (선택) 브라우저에서 섹션 단위 편집
+  mdbook-binder check ~/my-book               # 1. 사전 점검
+  mdbook-binder build html ~/my-book          # 2. HTML 생성
+  mdbook-binder build pdf ~/my-book --merge   # 3. (선택) PDF 병합
+  mdbook-binder edit ~/my-book/my-book.html   # 4. (선택) 편집
 
-영문 PDF를 로컬 LLM으로 번역해 도서로 만들려면(토큰 비용 없음, Ollama 필요,
-기본 모델: exaone3.5:7.8b — --model로 오버라이드 가능):
-  mdbook-binder import pdf ~/book.pdf ~/corpus-en           # 5. PDF → 영문 코퍼스
-  mdbook-binder translate ~/corpus-en ~/corpus-ko --direction e2k  # 6. 영→한 번역
-  mdbook-binder build html ~/corpus-ko                       # 7. 위 2와 동일하게 빌드
+\b
+영문 PDF 번역(로컬 LLM, 토큰 비용 없음, 기본 모델 exaone3.5:7.8b):
+  mdbook-binder import pdf ~/book.pdf ~/corpus-en
+  mdbook-binder translate ~/corpus-en ~/corpus-ko --direction e2k
+  mdbook-binder build html ~/corpus-ko
 
-각 명령의 옵션은 `mdbook-binder <명령> --help`로 확인한다(예: `mdbook-binder
-build pdf --help`).
+옵션은 `mdbook-binder <명령> --help`로 확인(예: `build pdf --help`).
 """
 )
 @click.version_option(__version__, prog_name="mdbook-binder")
