@@ -7,10 +7,12 @@ from mdbook_binder.pdf_import import (
     _detect_document_bullet_chars,
     _group_into_rows,
     _row_groups,
+    calibrate_word_x_tolerance,
     clean_paragraphs,
     detect_columns,
     detect_table,
     filter_garbled_words,
+    filter_page_number_words,
     import_pdf,
     strip_repeated_lines,
 )
@@ -211,6 +213,74 @@ class TestFilterGarbledWords:
 
     def test_empty_input_returns_empty_list(self):
         assert filter_garbled_words([]) == []
+
+
+class TestFilterPageNumberWords:
+    _PAGE_HEIGHT = 792.0  # US Letter, points
+
+    def test_standalone_number_in_top_margin_removed(self):
+        """회귀 대상: 쪽번호는 페이지마다 값이 달라 strip_repeated_lines()로는
+        못 잡는다 — 위치(상/하단 여백)와 형태(그 줄에 홀로)로 판단해야 한다."""
+        words = [_word("7", 300, 20)]  # 상단 여백(10% = 79.2pt) 안
+        assert filter_page_number_words(words, self._PAGE_HEIGHT) == []
+
+    def test_standalone_number_in_bottom_margin_removed(self):
+        words = [_word("42", 300, 770)]  # 하단 여백(90% = 712.8pt) 안
+        assert filter_page_number_words(words, self._PAGE_HEIGHT) == []
+
+    def test_number_in_body_area_kept(self):
+        """여백 밖(본문 영역)에 있는 숫자는 쪽번호가 아니라 진짜 본문 내용일 수 있어 건드리지 않는다."""
+        words = [_word("42", 300, 400)]
+        assert filter_page_number_words(words, self._PAGE_HEIGHT) == words
+
+    def test_number_sharing_row_with_other_words_kept(self):
+        """같은 줄에 다른 단어가 있으면(예: "Page 7") 쪽번호 단독 줄이 아니므로 보존한다."""
+        words = [_word("Page", 300, 20), _word("7", 340, 20)]
+        assert filter_page_number_words(words, self._PAGE_HEIGHT) == words
+
+    def test_non_numeric_standalone_word_in_margin_kept(self):
+        words = [_word("Chapter", 300, 20)]
+        assert filter_page_number_words(words, self._PAGE_HEIGHT) == words
+
+    def test_empty_input_returns_empty_list(self):
+        assert filter_page_number_words([], self._PAGE_HEIGHT) == []
+
+
+class TestCalibrateWordXTolerance:
+    def test_too_few_samples_returns_default(self):
+        assert calibrate_word_x_tolerance([0.0, 0.1, 3.0]) == 3.0
+
+    def test_tight_word_spacing_lowers_threshold(self):
+        """회귀 대상: 실사용 PDF(2009년 발행 서적)에서 단어 사이 간격이 기본값
+        3pt보다 좁아(약 2.8pt) 문장 전체가 한 단어로 붙어버린 사례."""
+        within_word = [0.0] * 40 + [0.1] * 20
+        between_word = [2.8] * 30
+        gaps = within_word + between_word
+        threshold = calibrate_word_x_tolerance(gaps)
+        assert 0.1 < threshold < 2.8
+
+    def test_wide_word_spacing_still_below_default(self):
+        """단어 사이 간격이 기본값(3pt)보다 넓은 문서라도, 보정값은 여전히
+        그 문서의 실제 간격보다 확실히 낮게 잡혀 정상 단어 분리를 해치지
+        않는다 — default를 넘어서는 일은 없다."""
+        within_word = [0.0] * 40
+        between_word = [3.5] * 30 + [4.0] * 20
+        gaps = within_word + between_word
+        threshold = calibrate_word_x_tolerance(gaps)
+        assert threshold <= 3.0
+        assert threshold < min(between_word)
+
+    def test_never_exceeds_default_even_with_wide_gaps(self):
+        gaps = [0.0] * 30 + [10.0] * 30
+        assert calibrate_word_x_tolerance(gaps) <= 3.0
+
+    def test_first_jump_used_not_largest_jump(self):
+        """전체에서 가장 큰 도약이 아니라, 0 근처 군집을 벗어나는 첫 도약을
+        경계로 써야 한다 — 뒤쪽의 드문 이상치 구간에 더 큰 도약이 있어도
+        속으면 안 된다."""
+        gaps = [0.0] * 30 + [1.5] * 30 + [16.0] * 30  # 1.5 근처가 진짜 경계
+        threshold = calibrate_word_x_tolerance(gaps)
+        assert threshold < 2.0
 
 
 class TestDetectDocumentBulletChars:

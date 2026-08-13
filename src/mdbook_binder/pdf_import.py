@@ -13,6 +13,15 @@ pdfplumber로 단어별 (x, y) 좌표를 직접 얻어 두 가지를 처리한�
   없는 알파벳 한 글자(예: "q")로 잘못 매핑해 내보내는 경우, 그 글자로
   시작하는 줄이 문서 전체에서 비정상적으로 반복되면 이 문서만의 불릿
   마커로 추론한다(실사용 PDF로 재현·확인된 문제).
+- 문서별 단어 간격 보정: pdfplumber의 기본 단어 구분 임계값(3pt)은 문서마다
+  실제 자간이 달라 고정값 하나로는 안 맞는 경우가 있다 — 어떤 PDF는 단어
+  사이 간격이 3pt보다 좁아(예: 2.8pt) 문장 전체가 한 단어로 붙어버린다
+  (실사용 PDF로 재현·확인). 문서 앞부분 몇 페이지에서 문자 간격을 표본
+  조사해 "같은 단어 안 간격"과 "단어 사이 간격"의 경계를 문서별로 추론한다.
+- 쪽번호 제거: 페이지 상/하단 여백에 홀로 있는 순수 숫자 단어(쪽번호로
+  추정)를 위치 기반으로 제거한다. 매 페이지 값이 바뀌어
+  strip_repeated_lines()(동일 문자열 반복 감지)로는 못 잡는 것을 보완한다
+  (실사용 PDF로 확인 — 본문 문장 사이사이에 쪽번호가 단락으로 끼어듦).
 
 챕터 분리(Part_/Chapter_ 명명 규칙에 맞춘 자동 분할)와 이미지 추출은 Phase 1
 스코프 밖이다 — PDF 전체를 파일 하나로 뽑아낸다. 그래도 manifest.py의 3순위
@@ -59,6 +68,14 @@ _CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 # _process_page()가 만든 마크다운 표의 행 — 그대로 보존해야 하므로 하드랩
 # 해제/불릿 분리 로직을 타지 않게 clean_paragraphs()에서 별도 취급한다.
 _TABLE_ROW_RE = re.compile(r"^\|.*\|$")
+# pdfplumber.extract_words()의 기본 단어 구분 임계값 — calibrate_word_x_tolerance()가
+# 문서별로 이보다 낮춰야 할 근거를 못 찾으면 이 값을 그대로 쓴다. 낮추는
+# 방향으로만 보정하는 이유는 반대로 올리면(단어 사이 간격을 넓게 잡으면)
+# 정상적으로 붙어 있던 단어까지 잘못 합쳐질 위험이 더 크기 때문이다.
+_DEFAULT_X_TOLERANCE = 3.0
+# 쪽번호로 볼 페이지 상/하단 여백 비율 — 표준적인 책 레이아웃의 위/아래
+# 여백 비중과 비슷한 값이다.
+_PAGE_NUMBER_MARGIN_FRAC = 0.1
 
 
 def _detect_document_bullet_chars(raw_text: str, *, min_occurrences: int = 5) -> set[str]:
@@ -337,6 +354,83 @@ def filter_garbled_words(words: list[dict]) -> list[dict]:
     return [w for w in words if not _CONTROL_CHAR_RE.search(w["text"])]
 
 
+def filter_page_number_words(words: list[dict], page_height: float, *, margin_frac: float = _PAGE_NUMBER_MARGIN_FRAC) -> list[dict]:
+    """페이지 상/하단 여백에 홀로 있는 순수 숫자 단어(쪽번호로 추정)를 제거한다(순수 함수).
+
+    쪽번호는 페이지마다 값이 바뀌어(1, 2, 3...) strip_repeated_lines()(동일
+    문자열 반복 감지)로는 못 잡는다 — 대신 위치(페이지 상/하단 여백 안)와
+    형태(그 줄에 다른 단어 없이 숫자만 홀로)로 판단한다. 본문 중간에 있는
+    숫자(여백 밖이거나, 다른 단어와 같은 줄)는 건드리지 않는다.
+    """
+    if not words:
+        return words
+
+    top_margin = page_height * margin_frac
+    bottom_margin = page_height * (1 - margin_frac)
+
+    result: list[dict] = []
+    for row in _group_into_rows(words):
+        if len(row) == 1:
+            w = row[0]
+            text = w["text"].strip()
+            if text.isdigit() and len(text) <= 4 and (w["top"] < top_margin or w["bottom"] > bottom_margin):
+                continue
+        result.extend(row)
+    return result
+
+
+def _sample_char_gaps(pdf, *, max_pages: int = 10) -> list[float]:
+    """문서 앞부분 max_pages 페이지에서 같은 줄 안 인접 문자 간 x간격을 표본 수집한다.
+
+    문서 전체를 다 훑지 않는다 — 자간 스타일은 보통 문서 전체에서
+    일관되므로 앞부분 표본만으로도 충분히 대표성을 갖고, 수백 페이지짜리
+    문서에서 매번 전체를 훑는 비용을 피한다. 20pt 넘는 간격(다른 줄로
+    잘못 묶인 경우 등 이상치)은 표본에서 제외한다.
+    """
+    gaps: list[float] = []
+    for page in pdf.pages[:max_pages]:
+        chars = sorted(page.chars, key=lambda c: (round(c["top"], 1), c["x0"]))
+        for i in range(1, len(chars)):
+            prev, cur = chars[i - 1], chars[i]
+            if abs(cur["top"] - prev["top"]) < 1.0:
+                gap = cur["x0"] - prev["x1"]
+                if 0 <= gap < 20:
+                    gaps.append(gap)
+    return gaps
+
+
+def calibrate_word_x_tolerance(gaps: list[float], *, default: float = _DEFAULT_X_TOLERANCE) -> float:
+    """문자 간격 표본에서 "같은 단어 안"과 "단어 사이" 간격의 경계를 추론한다(순수 함수).
+
+    pdfplumber의 기본 단어 구분 임계값(3pt)은 문서마다 실제 자간이 달라
+    맞지 않는 경우가 있다 — 어떤 문서는 단어 사이 간격이 3pt보다 좁아
+    (예: 2.8pt) 문장 전체가 한 단어로 붙어버린다(실사용 PDF로 확인).
+
+    간격 표본을 오름차순 정렬한 뒤, 0에 가까운 값(같은 단어 안 간격)들이
+    모인 군집을 지나 처음으로 뚜렷하게 벌어지는 지점(jump >= 0.5)을 그
+    문서의 "단어 사이 간격" 시작점으로 본다 — 대부분의 폰트는 글자 안
+    커닝이 0에 가깝고 단어 사이 공백만 그보다 확연히 크므로, 첫 번째
+    큰 도약이 곧 진짜 경계다(전체 표본에서 "가장 큰" 도약을 찾으면 드문
+    이상치 구간에서 더 큰 도약에 낚일 수 있어, 반드시 "처음" 나오는
+    도약을 써야 한다).
+
+    보정값은 항상 default 이하로만 낮춘다 — 반대로 올리면(간격 허용
+    범위를 넓히면) 정상적으로 떨어져 있던 단어까지 잘못 합칠 위험이 더
+    크다. 표본이 부족하거나(20건 미만) 뚜렷한 경계를 못 찾으면 default를
+    그대로 쓴다.
+    """
+    if len(gaps) < 20:
+        return default
+
+    ordered = sorted(gaps)
+    for i in range(1, len(ordered)):
+        jump = ordered[i] - ordered[i - 1]
+        if jump >= 0.5:
+            threshold = (ordered[i] + ordered[i - 1]) / 2
+            return max(1.0, min(threshold, default))
+    return default
+
+
 def extract_pdf_text(pdf_path: Path) -> list[str]:
     """pdfplumber로 페이지별 단어를 추출해 컬럼/표를 인식한 텍스트로 변환한다(페이지 1개당 문자열 1개).
 
@@ -349,7 +443,14 @@ def extract_pdf_text(pdf_path: Path) -> list[str]:
     import pdfplumber
 
     with pdfplumber.open(str(pdf_path)) as pdf:
-        return [_process_page(filter_garbled_words(page.extract_words())) for page in pdf.pages]
+        x_tolerance = calibrate_word_x_tolerance(_sample_char_gaps(pdf))
+        pages = []
+        for page in pdf.pages:
+            words = page.extract_words(x_tolerance=x_tolerance)
+            words = filter_garbled_words(words)
+            words = filter_page_number_words(words, page.height)
+            pages.append(_process_page(words))
+        return pages
 
 
 def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list[str]:
