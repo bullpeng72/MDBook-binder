@@ -728,15 +728,16 @@ ruff check src tests
 
 ### 0.4.1 (2026-08-13) — Breaking: `import pdf` → `import`
 
-- **breaking**: `import pdf <PDF_PATH> <OUT_DIR>` 서브커맨드 그룹을 없애고
-  `import <PDF_PATH> <OUT_DIR>` 최상위 명령으로 평탄화했다 — 지원 포맷을
-  PDF로 한정하기로 결정하면서(docx 등은 PDF로 변환 후 사용) 향후 다른
-  포맷 확장을 염두에 둔 그룹 구조를 유지할 이유가 없어졌다. 기존
-  `mdbook-binder import pdf ...`로 작성된 스크립트는
-  `mdbook-binder import ...`로 바꿔야 한다.
-- **feat**: `import`에 `.pdf` 확장자 검증을 추가했다 — PDF가 아닌 파일을
-  주면 즉시 안내 메시지로 실패한다(이전에는 pdfplumber의 원시 예외가
-  그대로 노출됐다).
+- **breaking**: `import pdf <PDF_PATH> <OUT_DIR>` → `import <PDF_PATH>
+  <OUT_DIR>`로 평탄화(PDF 전용으로 스코프 확정). 기존 스크립트는
+  명령어를 고쳐야 한다.
+- **feat**: `import`에 `.pdf` 확장자 검증 추가 — 다른 포맷이면 즉시
+  안내 메시지로 실패.
+- **feat**: `translate`의 `k2e`(한→영) 방향에 청크 단위 잔여 한글
+  검증·자동 재시도 추가(최대 2회, 실패 시 경고 출력). 자세한 동작은
+  [k2e 번역 완전성 검증](#k2e-번역-완전성-검증--잔여-한글-자동-재시도)
+  참고 — 기존 번역 결과물엔 소급 적용되지 않는다.
+- 회귀 테스트 24건 추가(총 219개).
 
 ### 0.4.0 (2026-08-13)
 
