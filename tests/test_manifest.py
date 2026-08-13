@@ -3,7 +3,15 @@
 import unicodedata
 from pathlib import Path
 
-from mdbook_binder.manifest import BookConfig, OrderConfig, resolve
+import yaml
+
+from mdbook_binder.manifest import (
+    BookConfig,
+    OrderConfig,
+    TranslationConfig,
+    resolve,
+    write_minimal_book_yaml,
+)
 
 
 def _write(root: Path, rel: str, content: str = "# Title\n\nbody\n") -> Path:
@@ -107,3 +115,58 @@ def test_toc_manifest_auto_detected_without_config(tmp_path: Path):
     assert len(chapters) == 1
     assert chapters[0].path.name == "Chapter_01_hello.md"
     assert chapters[0].part_label == "Part 1. 서론"
+
+
+class TestTranslationConfig:
+    def test_defaults_to_none_when_absent(self, tmp_path: Path):
+        """book.yaml에 translation: 섹션이 없으면 order와 마찬가지로 None이어야 한다."""
+        _write(tmp_path, "book.yaml", "title: 예시\n")
+
+        config = BookConfig.load(tmp_path)
+
+        assert config.translation is None
+
+    def test_parses_full_section_from_book_yaml(self, tmp_path: Path):
+        _write(
+            tmp_path,
+            "book.yaml",
+            "translation:\n"
+            "  model: llama3:8b\n"
+            "  host: http://remote:11434\n"
+            "  timeout: 120\n"
+            "  chunk_chars: 500\n",
+        )
+
+        config = BookConfig.load(tmp_path)
+
+        assert config.translation == TranslationConfig(
+            model="llama3:8b", host="http://remote:11434", timeout=120, chunk_chars=500
+        )
+
+    def test_partial_section_falls_back_to_dataclass_defaults(self, tmp_path: Path):
+        """일부 필드만 지정하면 나머지는 TranslationConfig 기본값을 그대로 쓴다."""
+        _write(tmp_path, "book.yaml", "translation:\n  model: llama3:8b\n")
+
+        config = BookConfig.load(tmp_path)
+
+        assert config.translation.model == "llama3:8b"
+        assert config.translation.host == TranslationConfig().host
+        assert config.translation.timeout == TranslationConfig().timeout
+        assert config.translation.chunk_chars == TranslationConfig().chunk_chars
+
+
+class TestWriteMinimalBookYaml:
+    def test_writes_language_only(self, tmp_path: Path):
+        path = tmp_path / "book.yaml"
+
+        write_minimal_book_yaml(path, language="en")
+
+        assert yaml.safe_load(path.read_text(encoding="utf-8")) == {"language": "en"}
+
+    def test_writes_extra_fields(self, tmp_path: Path):
+        path = tmp_path / "book.yaml"
+
+        write_minimal_book_yaml(path, language="ko", title="번역된 책")
+
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert data == {"language": "ko", "title": "번역된 책"}

@@ -10,9 +10,15 @@ from mdbook_binder.check import (
     _check_module,
     check_corpus,
     check_environment,
+    check_ollama,
     format_env_report,
 )
-from mdbook_binder.manifest import TIER_NATURAL_SORT, TIER_PART_CONVENTION
+from mdbook_binder.manifest import (
+    TIER_NATURAL_SORT,
+    TIER_PART_CONVENTION,
+    BookConfig,
+    TranslationConfig,
+)
 
 
 def _write(root: Path, rel: str, content: str) -> Path:
@@ -72,10 +78,10 @@ def test_check_module_reports_missing_with_hint():
     assert item.install_hint == 'pip install "mdbook-binder[pdf]"'
 
 
-def test_check_environment_returns_four_items(monkeypatch: pytest.MonkeyPatch):
+def test_check_environment_returns_five_items(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "playwright.sync_api", None)
     items = check_environment()
-    assert len(items) == 4
+    assert len(items) == 5
     assert all(isinstance(item, EnvCheckItem) for item in items)
 
 
@@ -102,3 +108,31 @@ def test_format_env_report_missing_shows_hint():
     assert "기능 A" in report
     assert 'pip install "mdbook-binder[pdf]"' in report
     assert "모든 선택 기능을 사용할 수 있습니다." not in report
+
+
+def test_check_ollama_flags_missing_package(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setitem(sys.modules, "ollama", None)
+    item = check_ollama(None)
+    assert not item.installed
+    assert 'mdbook-binder[translate]' in item.install_hint
+
+
+def test_check_ollama_uses_config_host_on_connection_failure():
+    """실제 Ollama 서버가 없는 CI 환경에서도, 연결 실패 메시지에 설정한
+    host가 그대로 반영되는지로 config가 실제로 전달됨을 검증한다."""
+    config = BookConfig(translation=TranslationConfig(host="http://192.0.2.1:11434", timeout=1))
+
+    item = check_ollama(config)
+
+    assert not item.installed
+    assert "192.0.2.1:11434" in item.install_hint
+
+
+def test_check_ollama_defaults_when_config_absent_or_translation_unset():
+    """config가 None이거나 translation이 비어 있으면 TranslationConfig() 기본값과
+    동일하게 동작해야 한다 — 로컬 Ollama 서버 유무에 좌우되지 않도록 두 결과를
+    직접 비교한다(실제 설치 여부를 단정하지 않음)."""
+    default_result = check_ollama(BookConfig(translation=TranslationConfig()))
+
+    assert check_ollama(None) == default_result
+    assert check_ollama(BookConfig()) == default_result

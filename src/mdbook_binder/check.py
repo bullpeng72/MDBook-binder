@@ -17,7 +17,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from mdbook_binder.manifest import BookConfig, ChapterFile, resolve_verbose
+from mdbook_binder.manifest import BookConfig, ChapterFile, TranslationConfig, resolve_verbose
 
 _H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
 _IMG_SRC_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
@@ -104,19 +104,23 @@ class EnvCheckItem:
     install_hint: str = ""
 
 
-def check_environment() -> list[EnvCheckItem]:
-    """PDF 빌드·Mermaid 사전 렌더링·웹 에디터 등 선택 기능(extras)의 설치 상태를 점검한다.
+def check_environment(config: BookConfig | None = None) -> list[EnvCheckItem]:
+    """PDF 빌드·Mermaid 사전 렌더링·웹 에디터·번역 등 선택 기능(extras)의 설치 상태를 점검한다.
 
     check_corpus()는 원본 마크다운만 훑어 즉시 끝나지만, 이쪽은 Playwright
-    Chromium을 실제로 잠깐 띄워봐야 정확히 판단할 수 있어(단순 import 성공만으로는
-    브라우저 바이너리가 실제로 존재하는지 알 수 없다) 더 느리다 — 그래서
-    check_corpus()와 분리해 호출부(CLI)에서 필요할 때만 명시적으로 부른다.
+    Chromium이나 Ollama 서버를 실제로 잠깐 띄워/찔러봐야 정확히 판단할 수
+    있어(단순 import 성공만으로는 브라우저 바이너리나 서버가 실제로 쓸 수
+    있는 상태인지 알 수 없다) 더 느리다 — 그래서 check_corpus()와 분리해
+    호출부(CLI)에서 필요할 때만 명시적으로 부른다. config는 book.yaml의
+    translation: 섹션(모델/호스트)을 반영하기 위해서만 쓰인다 — 없으면
+    TranslationConfig 기본값으로 점검한다.
     """
     return [
         _check_playwright_chromium(),
         _check_module("PDF 병합 (pypdf)", "pypdf", 'pip install "mdbook-binder[pdf]"'),
         _check_module("웹 에디터 (Flask)", "flask", 'pip install "mdbook-binder[editor]"'),
         _check_module("웹 에디터 이미지 처리 (Pillow)", "PIL", 'pip install "mdbook-binder[editor]"'),
+        check_ollama(config),
     ]
 
 
@@ -144,6 +148,43 @@ def _check_playwright_chromium() -> EnvCheckItem:
         if "Executable doesn't exist" in str(exc):
             return EnvCheckItem(feature, False, "python -m playwright install chromium")
         return EnvCheckItem(feature, False, f"Playwright Chromium 실행 확인 실패: {exc}")
+
+    return EnvCheckItem(feature, True)
+
+
+def check_ollama(config: BookConfig | None) -> EnvCheckItem:
+    """번역(translate)용 Ollama 패키지 설치·서버 접속·모델 존재 여부를 실제로 확인한다.
+
+    _check_playwright_chromium()과 같은 이유로 단순 import 성공만으로는
+    부족하다 — 서버가 실제로 응답하는지, 지정한 모델이 pull돼 있는지까지
+    확인해야 `translate` 실행 중에야 실패를 발견하는 일을 막는다. 모델이
+    없다고 자동으로 pull하지는 않는다(수 GB 다운로드를 사용자 동의 없이
+    시작하는 부작용은 피한다) — 설치 안내만 준다.
+    """
+    feature = "번역 (Ollama)"
+    pkg_hint = 'pip install "mdbook-binder[translate]"'
+    try:
+        from ollama import Client
+    except ImportError:
+        return EnvCheckItem(feature, False, pkg_hint)
+
+    cfg = config.translation if (config and config.translation) else TranslationConfig()
+    try:
+        client = Client(host=cfg.host, timeout=cfg.timeout)
+        models_resp = client.list()
+    except Exception as exc:
+        return EnvCheckItem(
+            feature, False, f"Ollama 서버 연결 실패({cfg.host}) — 서버가 실행 중인지 확인: {exc}"
+        )
+
+    # ollama list()가 돌려주는 모델 이름(.model)은 서버/모델에 따라 태그(:)
+    # 포함/미포함이 갈릴 수 있어, book.yaml에 "qwen3.6:35b"처럼 태그를 적어도
+    # 태그 없는 축약 이름과 매치되게 완화 비교한다 — 정확 일치만 하면 실제로는
+    # 설치돼 있는데 "미설치"로 오탐하는 경우가 생긴다.
+    model_names = {m.model for m in models_resp.models}
+    base_name = cfg.model.split(":")[0]
+    if not any(name == cfg.model or name.split(":")[0] == base_name for name in model_names):
+        return EnvCheckItem(feature, False, f"ollama pull {cfg.model}")
 
     return EnvCheckItem(feature, True)
 

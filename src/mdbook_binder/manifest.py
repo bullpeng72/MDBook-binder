@@ -67,6 +67,14 @@ class OrderConfig:
 
 
 @dataclass
+class TranslationConfig:
+    model: str = "qwen3.6:35b"
+    host: str = "http://localhost:11434"
+    timeout: int = 300
+    chunk_chars: int = 2000
+
+
+@dataclass
 class BookConfig:
     title: str | None = None
     author: str | None = None
@@ -77,6 +85,7 @@ class BookConfig:
     section_id_overrides: dict[str, str] = field(default_factory=dict)
     custom_css: str | None = None
     color: str | None = None
+    translation: TranslationConfig | None = None
 
     @classmethod
     def load(cls, root: Path) -> BookConfig | None:
@@ -98,6 +107,8 @@ class BookConfig:
         order_data = data.get("order")
         order = OrderConfig(**order_data) if order_data else None
         callouts = data.get("callouts") or {}
+        translation_data = data.get("translation")
+        translation = TranslationConfig(**translation_data) if translation_data else None
 
         return cls(
             title=data.get("title"),
@@ -114,6 +125,7 @@ class BookConfig:
             },
             custom_css=data.get("custom_css"),
             color=data.get("color"),
+            translation=translation,
         )
 
     def locale(self) -> dict[str, str]:
@@ -134,6 +146,18 @@ class BookConfig:
             print(f"  ⚠️  custom_css 지정 파일 없음: {path}")
             return ""
         return path.read_text(encoding="utf-8")
+
+
+def write_minimal_book_yaml(path: Path, *, language: str, **extra: str) -> None:
+    """language(+선택 필드)만 있는 최소 book.yaml을 쓴다.
+
+    pdf_import.py(PDF→코퍼스 추출)와 translation.py(번역된 코퍼스 출력) 둘 다
+    자기 산출물이 바로 빌드 가능한 코퍼스이길 요구하는데, 원본에 book.yaml이
+    없던 경우(PDF 임포트) 또는 원본 book.yaml을 그대로 옮기지 않기로 한 경우
+    공통으로 필요한 최소 스캐폴딩이라 한 곳에 둔다.
+    """
+    data = {"language": language, **extra}
+    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
 @dataclass

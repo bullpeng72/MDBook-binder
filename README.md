@@ -395,13 +395,19 @@ mdbook-binder edit <html_경로> [--port 5757] [--out edited.html] [--no-browser
 ### 설치 — PyPI (권장)
 
 ```bash
-pip install mdbook-binder                # 코어만 — HTML 빌드/check/편집(수동 조합)
-pip install "mdbook-binder[pdf]"         # + Playwright/pypdf (PDF 빌드용)
-pip install "mdbook-binder[editor]"      # + Flask/Pillow (웹 편집기용)
-pip install "mdbook-binder[pdf,editor]"  # 전체 기능
+pip install mdbook-binder                          # 코어만 — HTML 빌드/check/편집(수동 조합)
+pip install "mdbook-binder[pdf]"                    # + Playwright/pypdf (PDF 빌드용)
+pip install "mdbook-binder[editor]"                 # + Flask/Pillow (웹 편집기용)
+pip install "mdbook-binder[translate]"              # + ollama 클라이언트 (로컬 LLM 번역용)
+pip install "mdbook-binder[pdf,editor,translate]"   # 전체 기능
 
 python -m playwright install --with-deps chromium   # [pdf] 설치 시 1회
 ```
+
+`[translate]`는 `ollama` 파이썬 클라이언트만 추가한다 — Ollama 서버 자체와
+번역에 쓸 모델(예: `qwen3.6:35b`)은 별도로 설치해야 한다
+([ollama.com](https://ollama.com) 참고, `ollama pull <모델명>`). 서버가
+로컬에서 돌아가는 한 API 토큰 비용은 들지 않는다.
 
 ### 설치 — 저장소 클론 (개발/최신 미배포 수정 사항)
 
@@ -432,7 +438,7 @@ mdbook-binder build pdf ~/Docs/my-book --merge      # 4. (선택) 단권 PDF
 
 ```bash
 pip install -e ".[dev,pdf,editor]"
-pytest tests/ -q      # 84개 테스트 (manifest 7 + html_book 7 + check 10 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + server 12)
+pytest tests/ -q      # 128개 테스트 (manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 9 + translation 22 + server 12)
 ruff check src tests
 ```
 

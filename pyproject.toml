@@ -25,6 +25,9 @@ dependencies = [
 # check에서 "미설치"로 보인다 — minor 단위로 못박아 재현 가능하게 고정한다.
 pdf = ["playwright>=1.62,<1.63", "pypdf>=4.0"]
 editor = ["flask>=3.0", "pillow>=10.0"]
+# ollama는 순수 HTTP API 클라이언트라 playwright처럼 특정 바이너리 리비전에
+# 묶이지 않는다 — 상한 없이 최신을 허용한다.
+translate = ["ollama>=0.6.0"]
 dev = ["pytest>=8.0", "ruff>=0.4"]
 
 [project.scripts]

@@ -1,9 +1,11 @@
 """mdbook-binder CLI.
 
-    mdbook-binder check      <root>                                     빌드 전 사전 점검
-    mdbook-binder build html <root> [--out FILE] [--title TITLE] [--language ko|en] [--color NAME]
-    mdbook-binder build pdf  <root> [--merge [이름]] [--out-dir ...] [--color NAME]
-    mdbook-binder edit       <html>  [--port 5757] [--out ...] [--no-browser]
+    mdbook-binder check       <root>                                     빌드 전 사전 점검
+    mdbook-binder build html  <root> [--out FILE] [--title TITLE] [--language ko|en] [--color NAME]
+    mdbook-binder build pdf   <root> [--merge [이름]] [--out-dir ...] [--color NAME]
+    mdbook-binder edit        <html>  [--port 5757] [--out ...] [--no-browser]
+    mdbook-binder import pdf  <pdf> <out_dir> [--title TITLE]
+    mdbook-binder translate   <root> <out_dir> --direction k2e|e2k [--model ...] [--host ...]
 """
 
 from __future__ import annotations
@@ -27,6 +29,11 @@ _COLOR_HELP = "사이드바/제목 강조색 테마 (기본: book.yaml의 color 
   mdbook-binder build html ~/my-book          # 2. 검색 가능한 단일 HTML 생성
   mdbook-binder build pdf ~/my-book --merge   # 3. (선택) 한 권으로 병합한 PDF
   mdbook-binder edit ~/my-book/my-book.html   # 4. (선택) 브라우저에서 섹션 단위 편집
+
+영문 PDF를 로컬 LLM으로 번역해 도서로 만들려면(토큰 비용 없음, Ollama 필요):
+  mdbook-binder import pdf ~/book.pdf ~/corpus-en           # 5. PDF → 영문 코퍼스
+  mdbook-binder translate ~/corpus-en ~/corpus-ko --direction e2k  # 6. 영→한 번역
+  mdbook-binder build html ~/corpus-ko                       # 7. 위 2와 동일하게 빌드
 
 각 명령의 옵션은 `mdbook-binder <명령> --help`로 확인한다(예: `mdbook-binder
 build pdf --help`).
@@ -84,10 +91,11 @@ def check_cmd(root: Path) -> None:
         format_report,
     )
 
-    result = check_corpus(root)
+    config = BookConfig.load(root)
+    result = check_corpus(root, config)
     print(format_report(root, result))
     print()
-    print(format_env_report(check_environment()))
+    print(format_env_report(check_environment(config)))
 
 
 @main.group("build")
@@ -240,6 +248,111 @@ def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool
         port=port,
         open_browser=not no_browser,
     )
+
+
+@main.group("import")
+def import_group() -> None:
+    """외부 포맷(PDF 등)을 mdbook-binder 코퍼스로 변환한다."""
+
+
+@import_group.command(
+    "pdf",
+    epilog="""\b
+예시:
+  mdbook-binder import pdf ./book.pdf ./corpus-en
+  mdbook-binder import pdf ./book.pdf ./corpus-en --title "My Book"
+"""
+)
+@click.argument("pdf_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.argument("out_dir", type=click.Path(path_type=Path))
+@click.option("--title", "title_override", default=None, help="챕터 제목/파일명 오버라이드 (기본: PDF 파일명)")
+def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None) -> None:
+    """PDF_PATH(영문 PDF)를 단일 평면 마크다운 + book.yaml로 추출해 OUT_DIR에 만든다.
+
+    챕터 분리·이미지 추출은 하지 않는다(전체를 파일 하나로) — Phase 2/3.
+    결과는 그 자체로 `mdbook-binder build html/pdf`나 `translate`가 바로
+    받는 유효한 코퍼스다(3순위 자연정렬 폴백이 단일 파일도 그대로 받는다).
+    """
+    from mdbook_binder.pdf_import import import_pdf
+
+    print(f"\U0001f4c4 Extracting {pdf_path} ...")
+    md_path = import_pdf(pdf_path, out_dir, title=title_override)
+    print(f"✅ {md_path}")
+
+
+@main.command(
+    "translate",
+    epilog="""\b
+예시:
+  mdbook-binder translate ~/my-book ~/my-book-ko --direction e2k
+  mdbook-binder translate ~/my-book ~/my-book-en --direction k2e --model qwen3.6:35b
+  mdbook-binder translate ~/my-book ~/my-book-ko --direction e2k --check-only
+"""
+)
+@click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument("out_dir", type=click.Path(path_type=Path))
+@click.option(
+    "--direction", type=click.Choice(["k2e", "e2k"]), required=True,
+    help="k2e: 한국어→영어, e2k: 영어→한국어",
+)
+@click.option(
+    "--model", "model_override", default=None,
+    help="Ollama 모델명 오버라이드 (기본: book.yaml의 translation.model, 그것도 없으면 qwen3.6:35b)",
+)
+@click.option(
+    "--host", "host_override", default=None,
+    help="Ollama 서버 host 오버라이드 (기본: book.yaml의 translation.host, 그것도 없으면 http://localhost:11434)",
+)
+@click.option("--timeout", "timeout_override", type=int, default=None, help="청크 1건당 번역 타임아웃(초) 오버라이드")
+@click.option("--chunk-chars", "chunk_chars_override", type=int, default=None, help="청크 최대 글자수 오버라이드")
+@click.option(
+    "--check-only", is_flag=True, default=False,
+    help="실제 번역 없이 Ollama 연결·모델 설치 상태만 확인하고 종료한다",
+)
+def translate_cmd(
+    root: Path,
+    out_dir: Path,
+    direction: str,
+    model_override: str | None,
+    host_override: str | None,
+    timeout_override: int | None,
+    chunk_chars_override: int | None,
+    check_only: bool,
+) -> None:
+    """ROOT의 마크다운 코퍼스를 로컬 Ollama로 번역해 OUT_DIR에 미러링한다.
+
+    manifest.resolve()로 챕터를 걷어(exclude/order 규칙 그대로 적용) 순서대로
+    번역하고, 코드/mermaid/raw-HTML 블록은 번역하지 않고 그대로 보존한다.
+    book.yaml의 language 필드는 방향에 맞춰(k2e→en, e2k→ko) 재작성된다.
+    로컬 LLM 번역은 청크 하나에도 수십 초가 걸릴 수 있어 챕터·청크 단위
+    진행 상황을 출력한다. 모델이 없어도 자동으로 pull하지 않는다 —
+    `ollama pull <모델>`을 직접 실행해야 한다.
+    """
+    from mdbook_binder.check import check_ollama
+    from mdbook_binder.manifest import TranslationConfig
+    from mdbook_binder.translation import make_ollama_translate_fn, translate_corpus
+
+    config = BookConfig.load(root) or BookConfig()
+    base = config.translation or TranslationConfig()
+    cfg = TranslationConfig(
+        model=model_override or base.model,
+        host=host_override or base.host,
+        timeout=timeout_override or base.timeout,
+        chunk_chars=chunk_chars_override or base.chunk_chars,
+    )
+    target_language = "en" if direction == "k2e" else "ko"
+
+    probe = check_ollama(BookConfig(translation=cfg))
+    if not probe.installed:
+        raise click.ClickException(f"{probe.feature} 사용 불가 — {probe.install_hint}")
+    if check_only:
+        print(f"✅ {probe.feature} 사용 가능 (model={cfg.model}, host={cfg.host})")
+        return
+
+    translate_fn = make_ollama_translate_fn(cfg, target_language)
+    print(f"\U0001f310 Translating {root} → {out_dir} ({direction}) via {cfg.model}@{cfg.host} ...")
+    translate_corpus(root, out_dir, config, target_language, translate_fn, chunk_chars=cfg.chunk_chars)
+    print(f"✅ {out_dir}")
 
 
 if __name__ == "__main__":

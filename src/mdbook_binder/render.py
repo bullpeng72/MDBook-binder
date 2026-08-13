@@ -15,6 +15,12 @@ import markdown as md_lib
 
 from mdbook_binder.mermaid_wrap import auto_wrap_long_labels
 
+# translation.py도 재사용한다 — 번역 전 "손대면 안 되는" 블록을 가리는 경계와
+# HTML 렌더링 전 마크다운 파서로부터 블록을 보호하는 경계가 동일해야 한다.
+HTML_BLOCK_RE = re.compile(r"@@HTML_START@@\s*\n(.*?)@@HTML_END@@", re.DOTALL)
+MERMAID_FENCE_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
+BQ_CODE_FENCE_RE = re.compile(r"^> ```(\w*)\n(.*?)^> ```\s*$", re.MULTILINE | re.DOTALL)
+
 
 def tip_start_pattern(markers: list[str]) -> re.Pattern:
     """콜아웃(TIP박스) 시작 마커 패턴을 만든다.
@@ -36,13 +42,13 @@ def md_to_html(text: str, tip_pattern: re.Pattern) -> str:
         saved_blocks.append(("custom_html", m.group(1).strip()))
         return f"@@BLOCK_{len(saved_blocks) - 1}@@"
 
-    text = re.sub(r"@@HTML_START@@\s*\n(.*?)@@HTML_END@@", extract_html_block, text, flags=re.DOTALL)
+    text = HTML_BLOCK_RE.sub(extract_html_block, text)
 
     def extract_mermaid(m: re.Match) -> str:
         saved_blocks.append(("mermaid", auto_wrap_long_labels(m.group(1))))
         return f"@@BLOCK_{len(saved_blocks) - 1}@@"
 
-    text = re.sub(r"```mermaid\s*\n(.*?)```", extract_mermaid, text, flags=re.DOTALL)
+    text = MERMAID_FENCE_RE.sub(extract_mermaid, text)
 
     def extract_bq_code(m: re.Match) -> str:
         lang = (m.group(1) or "").strip()
@@ -60,12 +66,7 @@ def md_to_html(text: str, tip_pattern: re.Pattern) -> str:
         saved_blocks.append(("html", raw_html))
         return f"@@BLOCK_{len(saved_blocks) - 1}@@"
 
-    text = re.sub(
-        r"^> ```(\w*)\n(.*?)^> ```\s*$",
-        extract_bq_code,
-        text,
-        flags=re.MULTILINE | re.DOTALL,
-    )
+    text = BQ_CODE_FENCE_RE.sub(extract_bq_code, text)
 
     converter = md_lib.Markdown(
         extensions=["fenced_code", "tables", "toc", "attr_list", "def_list", "nl2br", "sane_lists"],
