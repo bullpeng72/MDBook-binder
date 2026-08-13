@@ -25,6 +25,7 @@
   - [PDF 빌드 — 개별/병합](#pdf-빌드--개별병합)
   - [HTML 편집](#html-편집)
   - [PDF 임포트 — import](#pdf-임포트--import)
+  - [import 결과물을 챕터별로 분리하기 — 사이드바 챕터 링크 만들기](#import-결과물을-챕터별로-분리하기--사이드바-챕터-링크-만들기)
   - [로컬 LLM 번역 — translate](#로컬-llm-번역--translate)
 - [3. 설치 가이드](#3-설치-가이드)
 - [알려진 한계](#알려진-한계)
@@ -129,6 +130,7 @@ MDBook-binder/
 │       ├── vendor/              # 번들: mermaid.min.js·Noto Sans KR 폰트·Tailwind·EasyMDE·Font Awesome·marked.js(오프라인용)
 │       └── editor/              # 편집 SPA (index.html/editor.css/editor.js)
 └── tests/
+    ├── test_cli.py               # CLI 옵션 배선·에러 메시지 (13건)
     ├── test_manifest.py          # 3단계 순서 해석 (12건)
     ├── test_html_book.py         # 섹션 id 충돌 회피·이미지 임베드·챕터 간 링크 재작성 (12건)
     ├── test_check.py             # 사전 점검 + 설치 환경 점검 (13건)
@@ -138,7 +140,7 @@ MDBook-binder/
     ├── test_theme.py             # 색상 테마 프리셋 + book.yaml/--color 연동 (8건)
     ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 (20건)
     ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 순수 함수 + 통합 (71건)
-    ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭 (27건)
+    ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭·k2e 재시도 (38건)
     └── test_server.py            # 웹 에디터 Flask API (12건)
 ```
 
@@ -453,6 +455,47 @@ docx 등 다른 포맷 문서는 PDF로 변환(워드프로세서의 "PDF로 저
 - 텍스트 레이어가 없는 스캔 PDF(이미지로만 구성된 PDF)는 지원하지
   않는다 — OCR 기능은 없다.
 
+### import 결과물을 챕터별로 분리하기 — 사이드바 챕터 링크 만들기
+
+`import`는 PDF 전체를 **단일 마크다운 파일 하나**로 추출한다(챕터 자동
+분리 미지원 — [알려진 한계](#알려진-한계) 참고). 빌드된 HTML의 사이드바
+항목은 **마크다운 파일 하나당 하나**씩 생긴다(`html_book.py`가 챕터 파일
+목록을 그대로 `<section id="{slug}">`로 매핑) — 그래서 import 직후
+상태로 바로 빌드하면 사이드바에는 책 전체를 가리키는 항목 하나만 뜬다.
+챕터마다 "챕터명 (링크)"를 사이드바에 만들려면 **소스 마크다운을 파일
+단위로 쪼개야 한다.** 방법은 아래 두 가지이지만, 실제로 새 사이드바
+항목을 만드는 것은 1번뿐이다.
+
+**1. 마크다운 직접 편집(새 챕터/사이드바 항목을 만드는 유일한 방법)**
+
+1. `import`가 만든 `<출력_디렉토리>/<제목>.md`를 에디터로 연다.
+2. 원래 PDF의 장/절에 해당하는 H2(또는 상위 헤딩) 경계마다 파일을 잘라
+   별도 `.md`로 저장한다. 잘라낸 각 파일은 [마크다운 저작
+   규칙](#마크다운-저작-규칙)대로 **H1 하나로 시작해야 한다** — 원래
+   H2였던 제목을 H1로 올린다.
+3. 파일명을 `Part_I_.../Chapter_01_제목.md`처럼 명명 규칙에 맞추면 순서가
+   자동 인식된다(2순위 규칙). 규칙을 따르지 않는 이름이라면
+   `book.yaml`의 `order.files`로 순서를 직접 나열한다.
+4. 이미지 참조(`![](images/foo.png)`)는 새 파일들이 원본과 **같은
+   디렉토리**에 남아 있으면 그대로 유효하다 — 하위 디렉토리로 옮겼다면
+   `../images/foo.png`처럼 상대경로를 다시 맞춘다.
+5. `mdbook-binder check <root>`로 순서·누락 이미지를 확인한 뒤
+   `mdbook-binder build html <root>`로 다시 빌드하면, 파일마다 하나씩
+   생긴 섹션이 사이드바에 "챕터명 (링크)"로 나타난다.
+
+**2. `edit` 웹 에디터 — 기존 챕터를 다듬는 용도이지, 새 챕터를 만드는
+기능은 없다**
+
+`edit`는 이미 빌드된 HTML의 **기존 섹션**만 다룬다: 섹션 마크다운
+재편집, 이미지 추가/삭제, 섹션 삭제, 섹션 제목 변경(= 사이드바 라벨
+변경). 하지만 **섹션을 새로 만드는 기능은 없다** —
+`editor/html_editor.py`에 섹션 생성 메서드가 없고 `editor/server.py`의
+API도 섹션별 조회/수정/삭제(`GET`/`POST`/`DELETE /api/sections/<id>`)만
+제공한다. 즉 import 직후의 단일 챕터를 `edit` 화면에서 "쪼개서" 여러
+사이드바 항목으로 만드는 것은 불가능하다 — 분할은 반드시 1번처럼
+마크다운 소스 단계에서 끝내고, `edit`는 분할·재빌드가 끝난 결과물의
+문구·이미지를 다듬는 용도로만 쓴다.
+
 ### 로컬 LLM 번역 — translate
 
 ```bash
@@ -482,6 +525,17 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
   번역하고, `OUT_DIR`에 동일한 디렉토리 구조로 미러링한다(`exclude` 규칙도
   그대로 적용된다).
 - 코드·Mermaid·raw-HTML 블록은 번역하지 않고 원문 그대로 보존한다.
+- **`k2e`(한→영)는 청크마다 번역 결과에 한글이 5% 넘게 남아있으면 그
+  청크를 최대 2회 재시도한다** — 소형 로컬 모델이 밀도 높은 청크에서
+  지시를 놓치고 원문을 그대로 돌려주는 경우가 있어(로컬 LLM 출력은
+  비결정적이라 다시 물으면 통과하는 경우가 흔함), 검증 없이 그대로
+  통과시키던 이전 동작을 보완했다. 재시도 후에도 한글이 남으면 해당
+  청크 번호와 함께 경고를 출력하고(`⚠️  재시도 후에도 한글이 남은
+  청크: [3] — 수동 확인 필요`), 빌드 전체를 막지는 않는다 — 번역이
+  끝난 뒤 콘솔에 출력되는 챕터 목록으로 어디를 직접 확인해야 하는지
+  알 수 있다. `e2k`(영→한)는 이 검증을 하지 않는다 — 한국어 기술
+  문서에 영문 고유명사·약어가 정상적으로 섞이는 게 흔해 "번역 실패"와
+  "정상적인 영문 잔존"을 구분할 신뢰할 만한 신호가 없기 때문이다.
 - `book.yaml`의 `language` 필드를 번역 방향에 맞춰(`k2e`→`en`, `e2k`→`ko`)
   다시 써서 출력한다.
 - 청크 하나에도 수십 초가 걸릴 수 있어 챕터·청크 단위 진행 상황을
@@ -584,7 +638,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 195개 테스트 (manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 71 + translation 27 + server 12)
+pytest tests/ -q      # 219개 테스트 (cli 13 + manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 71 + translation 38 + server 12)
 ruff check src tests
 ```
 

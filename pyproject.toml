@@ -23,10 +23,10 @@ dependencies = [
 # pip/pipx가 상한 없이 최신을 골라버리면(특히 pipx는 앱마다 별도 venv라
 # 재설치·업그레이드 때마다 조용히 최신으로 갈아탄다) 이미 받아둔 리비전과 어긋나
 # check에서 "미설치"로 보인다 — minor 단위로 못박아 재현 가능하게 고정한다.
-# pdfplumber(＋전이 의존성 pdfminer.six)는 import pdf의 컬럼/표 인식에 쓰인다
+# pdfplumber(＋전이 의존성 pdfminer.six)는 import의 컬럼/표 인식에 쓰인다
 # — pypdf의 layout 모드는 y좌표 대역만으로 줄을 재구성해 컬럼 개념이 없다
 # (실사용 PDF로 검증된 한계). pypdf는 build pdf의 병합(PdfWriter)에 계속 쓰여
-# 둘 다 필요하다. pillow는 import pdf의 이미지 추출(pypdf가 내부적으로
+# 둘 다 필요하다. pillow는 import의 이미지 추출(pypdf가 내부적으로
 # 요구함)과 웹 에디터([editor] extra) 양쪽에서 쓰인다.
 pdf = ["playwright>=1.62,<1.63", "pypdf>=4.0", "pdfplumber>=0.11.0", "pillow>=10.0"]
 editor = ["flask>=3.0", "pillow>=10.0"]

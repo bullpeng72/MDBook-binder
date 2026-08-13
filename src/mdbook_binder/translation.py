@@ -9,6 +9,12 @@ manifest.resolve()가 이미 아는 챕터 순서/exclude 규칙을 그대로 �
 일어나는 유일한 지점이다 — 나머지 함수는 전부 `translate_fn: Callable[[str], str]`을
 주입받는 순수/의사-순수 함수라, Ollama 설치 없이도 청킹·블록 보호·진행
 출력·book.yaml 재작성 로직을 단위 테스트할 수 있다.
+
+k2e(한→영) 방향은 청크당 has_residual_korean()으로 번역 결과를 검증하고
+실패 시 자동 재시도한다 — 소형 로컬 모델이 밀도 높은 청크에서 지시를
+놓치고 원문을 그대로 돌려주는 경우가 실사용에서 잦았는데, 이전에는 그런
+결과를 검증 없이 그대로 통과시켰다. e2k는 검증하지 않는다(§translate_chapter
+docstring 참고 — 정상적인 영문 잔존과 번역 실패를 구분할 신호가 없음).
 """
 
 from __future__ import annotations
@@ -95,12 +101,38 @@ def reassemble_chunks(translated_chunks: list[str]) -> str:
     return "\n\n".join(translated_chunks)
 
 
+_HANGUL_RE = re.compile(r"[가-힣]")
+# k2e(한→영) 청크 하나가 그리디 청킹으로 2000자 안팎씩 묶이는데, 로컬
+# 소형 모델(기본 exaone3.5:7.8b)은 이 정도 크기·마크다운 밀도의 청크에서
+# 가끔 지시를 놓치고 원문을 그대로(또는 앞부분만) 돌려준다 — 실사용
+# 코퍼스에서 섹션 전체가 한글로 고스란히 남는 형태로 재현됨. 성공적으로
+# 번역된 청크도 고유명사·acronym 한두 개 정도는 한글로 남을 수 있으므로
+# "0%"가 아니라 "그 청크가 사실상 번역되지 않았다"로 볼 수 있는 임계값을
+# 쓴다 — 원문 한국어 산문의 한글 비율(보통 30%+)과는 확실히 구분되면서도
+# 정상 번역의 잔여 고유명사는 오탐하지 않는 지점.
+_RESIDUAL_KOREAN_THRESHOLD = 0.05
+_MAX_RETRIES = 2
+
+
+def residual_korean_ratio(text: str) -> float:
+    """텍스트에서 한글 문자가 차지하는 비율(0~1)을 반환한다(순수 함수)."""
+    return len(_HANGUL_RE.findall(text)) / len(text) if text else 0.0
+
+
+def has_residual_korean(text: str, *, threshold: float = _RESIDUAL_KOREAN_THRESHOLD) -> bool:
+    """k2e 번역 결과가 사실상 번역되지 않은 채로 남아있는지 판정한다(순수 함수)."""
+    return residual_korean_ratio(text) > threshold
+
+
 def translate_chapter(
     text: str,
     chunk_chars: int,
     translate_fn: Callable[[str], str],
     *,
+    target_language: str | None = None,
+    max_retries: int = _MAX_RETRIES,
     on_chunk_start: Callable[[int, int], None] | None = None,
+    on_incomplete: Callable[[int, int], None] | None = None,
 ) -> str:
     """챕터 하나를 번역한다 — 코드/mermaid/raw-HTML을 보호한 뒤 청크 단위로
     translate_fn을 호출하고 재조립·복원한다.
@@ -108,6 +140,17 @@ def translate_chapter(
     on_chunk_start(j, n)은 청크(1-indexed) 번역을 시작하기 직전 호출된다 —
     로컬 LLM은 청크 하나에도 수십 초가 걸릴 수 있어, 호출부(translate_corpus)가
     이 훅으로 진행 상황을 찍지 않으면 멈춘 것처럼 보이기 쉽다.
+
+    target_language="en"(k2e)일 때만 has_residual_korean()으로 각 청크
+    결과를 검증하고, 여전히 한글이 남아있으면 translate_fn을 최대
+    max_retries회 다시 호출한다(동일 청크를 모델에 다시 물어보는 것 —
+    LLM 출력은 비결정적이라 재시도로 통과하는 경우가 실사용에서 흔하다).
+    e2k(target_language="ko")는 검증하지 않는다 — 한국어 기술 문서에
+    영문 고유명사·약어가 정상적으로 섞이는 게 흔해 "번역 실패"와
+    "정상적인 영문 잔존"을 신뢰성 있게 구분할 신호가 없다. 재시도 후에도
+    실패하면 on_incomplete(j, n)를 호출해 호출부가 어떤 청크가 여전히
+    한글로 남았는지 알 수 있게 한다 — 조용히 안 좋은 출력을 그대로
+    통과시키던 이전 동작과 달리, 최소한 사람이 나중에 찾아볼 수 있게 한다.
     """
     masked, blocks = protect_blocks(text)
     chunks = chunk_paragraphs(masked, chunk_chars)
@@ -117,7 +160,20 @@ def translate_chapter(
     for i, chunk in enumerate(chunks, start=1):
         if on_chunk_start:
             on_chunk_start(i, total)
-        translated.append(translate_fn(chunk) if chunk.strip() else chunk)
+        if not chunk.strip():
+            translated.append(chunk)
+            continue
+
+        result = translate_fn(chunk)
+        if target_language == "en" and has_residual_korean(result):
+            for _ in range(max_retries):
+                result = translate_fn(chunk)
+                if not has_residual_korean(result):
+                    break
+            else:
+                if on_incomplete:
+                    on_incomplete(i, total)
+        translated.append(result)
 
     return restore_blocks(reassemble_chunks(translated), blocks)
 
@@ -141,21 +197,37 @@ def translate_corpus(
 
     chapters = resolve(root, config)
     total = len(chapters)
+    incomplete_chapters: list[str] = []
     for i, chap in enumerate(chapters, start=1):
         rel = chap.path.relative_to(root)
         print(f"\U0001f4c4 [{i}/{total}] {rel}")
 
         text = chap.path.read_text(encoding="utf-8")
+        incomplete_chunks: list[int] = []
         out_text = translate_chapter(
             text, effective_chunk_chars, translate_fn,
+            target_language=target_language,
             on_chunk_start=lambda j, n: print(f"  청크 {j}/{n} 번역 중..."),
+            on_incomplete=lambda j, n, _sink=incomplete_chunks: _sink.append(j),
         )
+
+        if incomplete_chunks:
+            print(f"  ⚠️  재시도 후에도 한글이 남은 청크: {incomplete_chunks} — 수동 확인 필요")
+            incomplete_chapters.append(f"{rel} (청크 {incomplete_chunks})")
 
         dest = out_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(out_text, encoding="utf-8")
 
     _write_translated_book_yaml(root, out_dir, target_language)
+
+    if incomplete_chapters:
+        print(f"\n⚠️  총 {len(incomplete_chapters)}개 챕터에 재시도 후에도 번역되지 않은 청크가 있습니다:")
+        for item in incomplete_chapters:
+            print(f"   - {item}")
+        print("   해당 구간을 직접 열어 확인하거나, translate를 다시 실행해보세요"
+              "(로컬 LLM 출력은 비결정적이라 재실행 시 통과하는 경우가 있습니다).")
+
     return out_dir
 
 

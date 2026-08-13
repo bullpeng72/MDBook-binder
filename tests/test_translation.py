@@ -13,8 +13,10 @@ from mdbook_binder.manifest import BookConfig
 from mdbook_binder.translation import (
     _build_prompt,
     chunk_paragraphs,
+    has_residual_korean,
     protect_blocks,
     reassemble_chunks,
+    residual_korean_ratio,
     resolve_model_name,
     restore_blocks,
     translate_chapter,
@@ -131,6 +133,81 @@ class TestTranslateChapter:
         out = translate_chapter("hello", chunk_chars=100, translate_fn=lambda s: s)
         assert out == "hello"
 
+    def test_k2e_retries_chunk_that_still_has_korean(self):
+        """target_language='en'일 때, 첫 시도가 한글을 그대로 돌려주면 재시도한다."""
+        calls: list[str] = []
+
+        def fake(chunk: str) -> str:
+            calls.append(chunk)
+            return chunk if len(calls) == 1 else "Translated result."
+
+        out = translate_chapter("한글 원문입니다.", chunk_chars=100, translate_fn=fake, target_language="en")
+
+        assert len(calls) == 2  # 첫 시도 실패 → 1회 재시도로 성공
+        assert out == "Translated result."
+
+    def test_k2e_gives_up_after_max_retries_and_reports_incomplete(self):
+        """max_retries를 다 써도 한글이 남으면 on_incomplete(j, n)이 호출된다."""
+        calls: list[str] = []
+        incomplete: list[tuple[int, int]] = []
+
+        out = translate_chapter(
+            "한글 원문입니다.", chunk_chars=100,
+            translate_fn=lambda s: calls.append(s) or s,  # 항상 원문 그대로(번역 실패 시뮬레이션)
+            target_language="en", max_retries=2,
+            on_incomplete=lambda j, n: incomplete.append((j, n)),
+        )
+
+        assert len(calls) == 3  # 최초 시도 1 + 재시도 2
+        assert incomplete == [(1, 1)]
+        assert out == "한글 원문입니다."  # 실패해도 마지막 결과는 그대로 반환(빈 문자열로 날리지 않음)
+
+    def test_e2k_does_not_verify_or_retry(self):
+        """target_language='ko'(e2k)는 영문 잔존을 검증하지 않는다 — 정상적인
+        영문 고유명사와 번역 실패를 구분할 신호가 없으므로 검증 자체를 건너뛴다."""
+        calls: list[str] = []
+        out = translate_chapter(
+            "some english text", chunk_chars=100,
+            translate_fn=lambda s: calls.append(s) or s,
+            target_language="ko",
+        )
+        assert len(calls) == 1
+        assert out == "some english text"
+
+    def test_successful_translation_with_stray_proper_noun_is_not_retried(self):
+        """번역 결과에 고유명사 한두 개 정도(임계값 이하)만 한글로 남으면
+        재시도하지 않는다 — 완전 미번역과 정상 잔존을 구분해야 한다."""
+        calls: list[str] = []
+        translated = "This chapter explains the Harness Method in detail. " * 10 + "(하네스)"
+
+        out = translate_chapter(
+            "원문", chunk_chars=1000,
+            translate_fn=lambda s: calls.append(s) or translated,
+            target_language="en",
+        )
+
+        assert len(calls) == 1  # 재시도 없이 한 번만 호출됨
+        assert out == translated
+
+
+class TestResidualKorean:
+    def test_pure_english_has_zero_ratio(self):
+        assert residual_korean_ratio("Hello, world!") == 0.0
+
+    def test_pure_korean_has_high_ratio(self):
+        assert residual_korean_ratio("안녕하세요") == 1.0
+
+    def test_empty_string_has_zero_ratio(self):
+        assert residual_korean_ratio("") == 0.0
+
+    def test_below_threshold_is_not_flagged(self):
+        text = "a" * 100 + "가"  # ~1%
+        assert not has_residual_korean(text)
+
+    def test_above_threshold_is_flagged(self):
+        text = "한글이 절반 이상인 문장입니다"
+        assert has_residual_korean(text)
+
 
 class TestTranslateCorpus:
     def test_respects_manifest_exclude(self, tmp_path: Path):
@@ -158,6 +235,33 @@ class TestTranslateCorpus:
         assert "[1/1]" in out
         assert "chapter.md" in out
         assert "청크 1/1 번역 중..." in out
+
+    def test_reports_incomplete_chunks_after_retries_exhausted(self, tmp_path: Path, capsys):
+        """k2e 방향에서 재시도 후에도 한글이 남으면 챕터별 경고와 최종
+        요약이 함께 출력돼야 한다 — 이전에는 이런 실패를 조용히 그대로
+        출력 파일에 써버렸다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "한글 원문입니다.\n")
+
+        translate_corpus(root, out_dir, config=None, target_language="en", translate_fn=lambda s: s)
+
+        out = capsys.readouterr().out
+        assert "재시도 후에도 한글이 남은 청크" in out
+        assert "chapter.md" in out
+        assert "총 1개 챕터에 재시도 후에도" in out
+        # 실패해도 파일은 (최선의 결과로) 정상적으로 써진다 — 빌드 자체를 막지 않는다
+        assert (out_dir / "chapter.md").exists()
+
+    def test_no_incomplete_summary_when_all_chunks_translate_cleanly(self, tmp_path: Path, capsys):
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "한글 원문입니다.\n")
+
+        translate_corpus(root, out_dir, config=None, target_language="en", translate_fn=lambda s: "Clean translation.")
+
+        out = capsys.readouterr().out
+        assert "재시도" not in out
 
     def test_rewrites_book_yaml_language_and_keeps_other_fields(self, tmp_path: Path):
         root = tmp_path / "src"
