@@ -41,8 +41,9 @@ _COLOR_HELP = "사이드바/제목 강조색 테마 (기본: book.yaml의 color 
 )
 @click.version_option(__version__, prog_name="mdbook-binder")
 def main() -> None:
-    """mdbook-binder — 마크다운 코퍼스를 검색 가능한 HTML 도서·PDF·웹 편집기로 변환한다.
+    """mdbook-binder — 마크다운 코퍼스를 검색 가능한 HTML·PDF·웹 편집기로 변환한다.
 
+    \b
     마크다운 파일 모음을 입력받아 사이드바 목차·전문 검색을 갖춘 단일 HTML,
     챕터별/병합 PDF, 브라우저에서 다시 편집할 수 있는 웹 에디터를 만든다.
     챕터 순서는 book.yaml 설정 또는 파일명 규칙·자연정렬로 자동 추론한다.
