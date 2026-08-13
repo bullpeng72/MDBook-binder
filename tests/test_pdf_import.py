@@ -201,6 +201,24 @@ class TestCleanParagraphs:
         raw = "1. First item\na. Sub item\n* Star item"
         assert clean_paragraphs(raw) == "1. First item\n\na. Sub item\n\n* Star item"
 
+    def test_multiple_bullets_on_one_physical_line_are_split(self):
+        """슬라이드형 PDF는 여러 불릿을 한 줄에 가로로 배치하기도 한다 —
+        각 불릿 앞에서 줄을 쪼갠 뒤 별도 단락으로 취급해야 한다."""
+        raw = "● The model ● LoRA low-rank (r) ● Modules for fine-tuning, etc."
+        assert clean_paragraphs(raw) == (
+            "● The model\n\n● LoRA low-rank (r)\n\n● Modules for fine-tuning, etc."
+        )
+
+    def test_bullet_symbol_variants_split_mid_line(self):
+        raw = "◦ First ‣ Second • Third"
+        assert clean_paragraphs(raw) == "◦ First\n\n‣ Second\n\n• Third"
+
+    def test_hyphen_and_star_not_split_mid_line(self):
+        """"-"/"*"는 하이픈 복합어·강조 마크업과 흔히 섞여 줄 중간에서
+        쪼개면 위험하므로 줄 시작에서만 불릿으로 인식한다."""
+        raw = "This well-known model uses **bold** text, not a bullet list."
+        assert clean_paragraphs(raw) == raw
+
     def test_dash_without_following_space_is_not_treated_as_bullet(self):
         """행 앞에 나온 하이픈이라도 뒤에 공백이 없으면(예: 음수, 복합어) 불릿으로
         오인해 단락을 끊지 않는다."""

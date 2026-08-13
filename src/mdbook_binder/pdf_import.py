@@ -56,7 +56,16 @@ _HYPHEN_BREAK_RE = re.compile(r"\w-$")
 # 잘못 매핑해 내보내는 경우는 이 정규식만으로 못 잡는다 — 그런 매핑은
 # 문서마다 다른 글자를 쓰므로 하드코딩할 수 없고, _detect_document_bullet_chars()가
 # 문서별로 통계적으로 추론해 보완한다.
-_BULLET_MARKER_RE = re.compile(r"^(?:[•\-*◦‣]|\d+[.)]|[a-zA-Z][.)])\s")
+_BULLET_MARKER_RE = re.compile(r"^(?:[•●\-*◦‣]|\d+[.)]|[a-zA-Z][.)])\s")
+# 슬라이드형 PDF는 여러 불릿 항목을 한 물리적 줄(같은 y좌표 row)에 가로로
+# 나란히 배치하는 경우가 있다("● The model ● LoRA low-rank (r) ● Modules
+# ..." 전부 한 줄, 실사용 PDF로 확인됨) — _rows_to_text()는 같은 row의
+# 단어를 공백으로만 이어붙이므로 그대로 두면 항목 여러 개가 한 문단으로
+# 뭉친다. 줄 시작이 아니라 줄 중간에서도 불릿을 인식해야 하므로 별도
+# 정규식으로 분리한다. •/◦/‣/●처럼 산문에 절대 등장하지 않는 기호만
+# 포함한다 — "-"/"*"는 하이픈 복합어("well-known")·강조(**bold**) 등과
+# 흔히 섞여 줄 중간에서 쪼개면 오히려 문장을 망가뜨릴 위험이 크다.
+_MIDLINE_BULLET_SPLIT_RE = re.compile(r"(?<=\S) (?=[•●◦‣]\s)")
 # _detect_document_bullet_chars() 후보 패턴 — 구두점 없이 알파벳 한 글자 +
 # 공백으로 시작하는 줄. 유니코드 사용자영역(U+E000~U+F8FF)도 후보에 넣는다 —
 # Word 등에서 만든 오래된 PDF는 Wingdings류 심볼 폰트의 불릿 글리프를
@@ -607,9 +616,11 @@ def clean_paragraphs(raw_text: str) -> str:
     - 마크다운 표 행("| ... |")은 그대로 보존한다(연속된 행끼리는 빈 줄 없이
       묶어 표 구조가 깨지지 않게 한다) — 하드랩 해제·불릿 분리 대상이 아니다.
     - 문장부호(.!?:)로 안 끝나는 줄은 다음 줄과 공백으로 합친다(하드랩 해제)
-    - 새 불릿 마커(•/-/*/숫자./영문. 및 _detect_document_bullet_chars()가
+    - 새 불릿 마커(•/●/-/*/숫자./영문. 및 _detect_document_bullet_chars()가
       이 문서에서 추론한 구두점 없는 한 글자 불릿)로 시작하는 줄은 그
       앞에서 단락을 끊는다(이전 줄이 문장부호로 안 끝났어도)
+    - 여러 불릿(•/●/◦/‣)이 한 물리적 줄에 나란히 배치된 경우 각 불릿
+      앞에서 줄을 먼저 쪼갠 뒤 위 규칙을 적용한다
     - 단어 중간 하이픈 개행은 하이픈 없이 그대로 합친다
     - 빈 줄(몇 개가 연속이든)은 단락 구분 하나로 정규화된다
 
@@ -617,6 +628,7 @@ def clean_paragraphs(raw_text: str) -> str:
     페이지 텍스트를 페이지 단위로 반환하므로 여기 도달할 때는 이미 하나의
     이어붙인 문자열이라 원래 페이지 경계 정보가 없다(Phase 2 후보).
     """
+    raw_text = _MIDLINE_BULLET_SPLIT_RE.sub("\n", raw_text)
     doc_bullet_chars = _detect_document_bullet_chars(raw_text)
     paragraphs: list[str] = []
     current: list[str] = []
