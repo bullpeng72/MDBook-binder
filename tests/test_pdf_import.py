@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from mdbook_binder.manifest import TIER_NATURAL_SORT, resolve_verbose
-from mdbook_binder.pdf_import import clean_paragraphs, import_pdf
+from mdbook_binder.pdf_import import clean_paragraphs, import_pdf, strip_repeated_lines
 
 
 def _make_minimal_pdf(lines: list[str]) -> bytes:
@@ -65,6 +65,56 @@ class TestCleanParagraphs:
 
     def test_empty_input_returns_empty_string(self):
         assert clean_paragraphs("") == ""
+
+    def test_bullet_marker_starts_new_paragraph_without_terminal_punctuation(self):
+        """슬라이드형 PDF는 불릿 항목이 문장부호로 안 끝나는 경우가 많다 —
+        새 불릿 마커를 만나면 이전 줄이 문장부호로 안 끝났어도 단락을 끊는다."""
+        raw = "Heading with no period\n- First point\n- Second point"
+        assert clean_paragraphs(raw) == "Heading with no period\n\n- First point\n\n- Second point"
+
+    def test_wrapped_continuation_of_bullet_stays_in_same_paragraph(self):
+        raw = "- A bullet that wraps\n  across two lines."
+        assert clean_paragraphs(raw) == "- A bullet that wraps across two lines."
+
+    def test_numbered_and_lettered_markers_also_split(self):
+        raw = "1. First item\na. Sub item\n* Star item"
+        assert clean_paragraphs(raw) == "1. First item\n\na. Sub item\n\n* Star item"
+
+    def test_dash_without_following_space_is_not_treated_as_bullet(self):
+        """행 앞에 나온 하이픈이라도 뒤에 공백이 없으면(예: 음수, 복합어) 불릿으로
+        오인해 단락을 끊지 않는다."""
+        raw = "The value is\n-5 degrees today."
+        assert clean_paragraphs(raw) == "The value is -5 degrees today."
+
+
+class TestStripRepeatedLines:
+    def test_line_repeated_on_every_page_is_removed(self):
+        pages = ["Title A\nFooter\ncontent 1", "Title B\nFooter\ncontent 2", "Title C\nFooter\ncontent 3"]
+        result = strip_repeated_lines(pages)
+        assert all("Footer" not in p for p in result)
+        assert "Title A" in result[0] and "content 1" in result[0]
+
+    def test_single_page_returned_unchanged(self):
+        """반복 여부를 판단할 표본(2페이지 이상)이 없으면 그대로 반환한다."""
+        pages = ["Title\nFooter\ncontent"]
+        assert strip_repeated_lines(pages) == pages
+
+    def test_line_below_threshold_is_kept(self):
+        """min_fraction 미만으로만 등장하는 줄은 진짜 본문일 수 있어 지우지 않는다."""
+        pages = ["Footer\npage one", "page two", "page three", "page four"]
+        result = strip_repeated_lines(pages, min_fraction=0.5)
+        assert "Footer" in result[0]
+
+    def test_repeated_line_within_same_page_counts_once(self):
+        """같은 페이지 안에서 같은 줄이 여러 번 나와도 그 페이지는 1회로만 센다."""
+        pages = ["Footer\nFooter\ncontent 1", "unique page two"]
+        result = strip_repeated_lines(pages, min_fraction=0.5)
+        # 2페이지 중 1페이지에만 등장(중복 카운트 안 함) → threshold(max(2, 1)=2) 미달로 유지
+        assert "Footer" in result[0]
+
+    def test_no_repeated_lines_returns_pages_unchanged(self):
+        pages = ["unique one", "unique two", "unique three"]
+        assert strip_repeated_lines(pages) == pages
 
 
 def test_import_pdf_produces_buildable_corpus(tmp_path: Path):
