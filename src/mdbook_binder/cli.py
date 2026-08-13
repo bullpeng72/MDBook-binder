@@ -62,6 +62,10 @@ def check_cmd(root: Path) -> None:
     """ROOT의 마크다운 코퍼스를 실제로 빌드하지 않고 미리 점검한다.
 
     \b
+    인자:
+      ROOT  마크다운 코퍼스 루트 디렉토리
+
+    \b
     확인 항목:
     - 챕터 순서: book.yaml order → toc 매니페스트 → Part/Chapter 명명
       규칙 → 자연정렬 중 무엇으로 정해졌는지와 최종 순서
@@ -131,6 +135,10 @@ def build_html_cmd(
     """ROOT 아래 마크다운 코퍼스를 검색 가능한 단일 HTML 도서로 빌드한다.
 
     \b
+    인자:
+      ROOT  마크다운 코퍼스 루트 디렉토리
+
+    \b
     사이드바 목차·인페이지 전문 검색을 갖춘 단일 HTML 파일을 만든다
     (이미지는 base64로 인라인 임베드). Mermaid 다이어그램은 가능하면
     Playwright/Chromium으로 정적 SVG를 사전 렌더링해 같이 임베드하고,
@@ -177,6 +185,10 @@ def build_pdf_cmd(
     """ROOT 아래 마크다운을 챕터별 PDF(또는 --merge 시 단권)로 빌드한다.
 
     \b
+    인자:
+      ROOT  마크다운 코퍼스 루트 디렉토리
+
+    \b
     Playwright/Chromium으로 각 챕터를 렌더링한다 — `pip install
     "mdbook-binder[pdf]"` 후 `python -m playwright install chromium`
     설치가 먼저 필요하다. 긴 Mermaid 다이어그램은 페이지 경계에 맞춰
@@ -209,6 +221,10 @@ def build_pdf_cmd(
 @click.option("--no-browser", is_flag=True, default=False, help="브라우저 자동 오픈 생략")
 def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool) -> None:
     """HTML_PATH를 브라우저 편집 UI로 연다.
+
+    \b
+    인자:
+      HTML_PATH  build html로 만든 HTML 파일 경로
 
     \b
     build html이 만든 <section> 구조에만 의존한다. 섹션 단위
@@ -246,6 +262,11 @@ def import_group() -> None:
 @click.option("--no-images", "no_images", is_flag=True, default=False, help="이미지 추출 없이 텍스트만 뽑는다")
 def import_pdf_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool) -> None:
     """PDF를 마크다운 코퍼스로 추출한다.
+
+    \b
+    인자:
+      PDF_PATH  추출할 PDF 경로
+      OUT_DIR   마크다운 코퍼스를 생성할 디렉토리
 
     \b
     전체를 단일 파일로 추출한다(챕터 자동 분리는 아직 지원 안 함).
@@ -302,6 +323,11 @@ def translate_cmd(
     check_only: bool,
 ) -> None:
     """ROOT의 마크다운 코퍼스를 로컬 Ollama로 번역해 OUT_DIR에 미러링한다.
+
+    \b
+    인자:
+      ROOT     번역할 마크다운 코퍼스 루트
+      OUT_DIR  번역 결과를 미러링할 디렉토리
 
     \b
     기본 모델은 exaone3.5:7.8b다(--model로 오버라이드 가능). 코드·
