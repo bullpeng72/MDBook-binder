@@ -66,6 +66,15 @@ _BULLET_MARKER_RE = re.compile(r"^(?:[•●\-*◦‣]|\d+[.)]|[a-zA-Z][.)])\s")
 # 포함한다 — "-"/"*"는 하이픈 복합어("well-known")·강조(**bold**) 등과
 # 흔히 섞여 줄 중간에서 쪼개면 오히려 문장을 망가뜨릴 위험이 크다.
 _MIDLINE_BULLET_SPLIT_RE = re.compile(r"(?<=\S) (?=[•●◦‣]\s)")
+# "#1)"/"#3.1)" 같은 순번 표기(원문이 "Step #1)" 식으로 씀)도 앞의 불릿
+# 목록·문장과 같은 물리적 줄에 뭉쳐 나오는 경우가 있다("● The answer in
+# the required format #4) Define reward functions In GRPO, ..." 전부 한
+# 줄, 실사용 PDF로 확인됨) — 새 단계가 시작되는 지점이므로 불릿과 동일하게
+# 줄 중간이라도 그 앞에서 쪼개고, 쪼갠 줄은 paragraph 경계로도 취급한다
+# (_STEP_MARKER_RE). 렌더링 시 H1로 오인식되지 않게 하는 처리는 별도로
+# 이미 하고 있다("#"으로 시작하는 줄은 전부 이스케이프).
+_MIDLINE_STEP_SPLIT_RE = re.compile(r"(?<=\S) (?=#\d+(?:\.\d+)*\)\s)")
+_STEP_MARKER_RE = re.compile(r"^#\d+(?:\.\d+)*\)\s")
 # _detect_document_bullet_chars() 후보 패턴 — 구두점 없이 알파벳 한 글자 +
 # 공백으로 시작하는 줄. 유니코드 사용자영역(U+E000~U+F8FF)도 후보에 넣는다 —
 # Word 등에서 만든 오래된 PDF는 Wingdings류 심볼 폰트의 불릿 글리프를
@@ -621,6 +630,8 @@ def clean_paragraphs(raw_text: str) -> str:
       앞에서 단락을 끊는다(이전 줄이 문장부호로 안 끝났어도)
     - 여러 불릿(•/●/◦/‣)이 한 물리적 줄에 나란히 배치된 경우 각 불릿
       앞에서 줄을 먼저 쪼갠 뒤 위 규칙을 적용한다
+    - "#1)"/"#3.1)" 같은 순번 표기도 앞의 불릿·문장과 한 줄에 뭉쳐 나오면
+      그 앞에서 쪼개고, 불릿과 동일하게 새 단락 경계로 취급한다
     - 단어 중간 하이픈 개행은 하이픈 없이 그대로 합친다
     - 빈 줄(몇 개가 연속이든)은 단락 구분 하나로 정규화된다
 
@@ -629,6 +640,7 @@ def clean_paragraphs(raw_text: str) -> str:
     이어붙인 문자열이라 원래 페이지 경계 정보가 없다(Phase 2 후보).
     """
     raw_text = _MIDLINE_BULLET_SPLIT_RE.sub("\n", raw_text)
+    raw_text = _MIDLINE_STEP_SPLIT_RE.sub("\n", raw_text)
     doc_bullet_chars = _detect_document_bullet_chars(raw_text)
     paragraphs: list[str] = []
     current: list[str] = []
@@ -651,6 +663,10 @@ def clean_paragraphs(raw_text: str) -> str:
             flush_block()
             continue
 
+        # 순번 표기("#1)" 등)는 escape보다 먼저 판정해야 한다 — escape 후에는
+        # "\#1)"이 돼 _STEP_MARKER_RE("^#\d")에 더 이상 매치되지 않는다.
+        is_step_marker = _STEP_MARKER_RE.match(line) is not None
+
         # 원문이 "#1) Load the model"처럼 "#"을 순번 표기로 쓰는 경우가
         # 흔한데, python-markdown은 "#" 뒤에 공백이 없어도 ATX 헤딩으로
         # 인식해(예: "#1) ..." → <h1>) 챕터당 H1 하나 규칙이 깨지고 본문
@@ -668,7 +684,7 @@ def clean_paragraphs(raw_text: str) -> str:
         flush_block()
 
         is_doc_bullet = len(line) > 1 and line[0].lower() in doc_bullet_chars and line[1] == " "
-        if _BULLET_MARKER_RE.match(line) or is_doc_bullet:
+        if _BULLET_MARKER_RE.match(line) or is_doc_bullet or is_step_marker:
             flush_prose()
             current.append(line)
         elif current and _HYPHEN_BREAK_RE.search(current[-1]) and line[:1].islower():

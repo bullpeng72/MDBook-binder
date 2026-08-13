@@ -219,6 +219,21 @@ class TestCleanParagraphs:
         raw = "This well-known model uses **bold** text, not a bullet list."
         assert clean_paragraphs(raw) == raw
 
+    def test_step_marker_glued_to_preceding_bullet_is_split_out(self):
+        """"#4) Define reward functions ..."처럼 순번 표기가 앞 불릿과 한
+        줄에 뭉쳐 나오면 그 앞에서 쪼개고 별도 단락으로 취급해야 한다."""
+        raw = "● The answer in the required format #4) Define reward functions In GRPO, we validate the response."
+        assert clean_paragraphs(raw) == (
+            "● The answer in the required format\n\n"
+            "\\#4) Define reward functions In GRPO, we validate the response."
+        )
+
+    def test_step_marker_with_subsection_number_recognized(self):
+        raw = "Some intro text. #3.1) Custom tools While agents are great at reasoning."
+        assert clean_paragraphs(raw) == (
+            "Some intro text.\n\n\\#3.1) Custom tools While agents are great at reasoning."
+        )
+
     def test_dash_without_following_space_is_not_treated_as_bullet(self):
         """행 앞에 나온 하이픈이라도 뒤에 공백이 없으면(예: 음수, 복합어) 불릿으로
         오인해 단락을 끊지 않는다."""
