@@ -68,7 +68,7 @@ class OrderConfig:
 
 @dataclass
 class TranslationConfig:
-    model: str = "qwen3.6:35b"
+    model: str = "exaone3.5:7.8b"
     host: str = "http://localhost:11434"
     timeout: int = 300
     chunk_chars: int = 2000

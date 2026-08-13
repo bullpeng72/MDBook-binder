@@ -405,7 +405,7 @@ python -m playwright install --with-deps chromium   # [pdf] 설치 시 1회
 ```
 
 `[translate]`는 `ollama` 파이썬 클라이언트만 추가한다 — Ollama 서버 자체와
-번역에 쓸 모델(예: `qwen3.6:35b`)은 별도로 설치해야 한다
+번역에 쓸 모델(기본값 `exaone3.5:7.8b`)은 별도로 설치해야 한다
 ([ollama.com](https://ollama.com) 참고, `ollama pull <모델명>`). 서버가
 로컬에서 돌아가는 한 API 토큰 비용은 들지 않는다.
 
