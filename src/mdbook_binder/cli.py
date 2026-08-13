@@ -91,7 +91,16 @@ def check_cmd(root: Path) -> None:
     print(format_env_report(check_environment(config)))
 
 
-@main.group("build")
+@main.group(
+    "build",
+    epilog="""\b
+예시:
+  mdbook-binder build html <ROOT> [--out FILE] [--title ...] [--color ...]
+  mdbook-binder build pdf  <ROOT> [--merge [이름]] [--out-dir ...]
+
+옵션은 `build html --help` / `build pdf --help`로 확인.
+"""
+)
 def build() -> None:
     """HTML 또는 PDF 도서를 빌드한다.
 
@@ -104,6 +113,7 @@ def build() -> None:
 
 @build.command(
     "html",
+    short_help="마크다운 코퍼스를 검색 가능한 단일 HTML 도서로 빌드한다.",
     epilog="""\b
 예시:
   mdbook-binder build html ~/my-book
@@ -161,6 +171,7 @@ def build_html_cmd(
 
 @build.command(
     "pdf",
+    short_help="마크다운 코퍼스를 챕터별 PDF(또는 --merge 시 단권)로 빌드한다.",
     epilog="""\b
 예시:
   mdbook-binder build pdf ~/my-book                # 챕터별 PDF
@@ -242,7 +253,15 @@ def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool
     )
 
 
-@main.group("import")
+@main.group(
+    "import",
+    epilog="""\b
+예시:
+  mdbook-binder import pdf <PDF_PATH> <OUT_DIR> [--title ...] [--no-images]
+
+옵션은 `import pdf --help`로 확인.
+"""
+)
 def import_group() -> None:
     """외부 포맷(PDF 등)을 mdbook-binder 코퍼스로 변환한다."""
 
