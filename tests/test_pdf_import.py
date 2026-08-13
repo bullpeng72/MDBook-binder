@@ -294,6 +294,14 @@ class TestDetectDocumentBulletChars:
         raw = "\n".join([f"q Item number {i}" for i in range(3)])
         assert _detect_document_bullet_chars(raw, min_occurrences=5) == set()
 
+    def test_private_use_area_symbol_font_glyph_detected(self):
+        """회귀 대상: Word 등에서 만든 오래된 PDF는 Wingdings류 심볼 폰트의
+        불릿 글리프를 유니코드 사용자영역(U+E000~U+F8FF)에 매핑한다 — 실사용
+        PDF에서 3천 번 넘게 등장하는 불릿이 전혀 인식되지 않던 사례로 확인."""
+        bullet = ""
+        raw = "\n".join([f"{bullet} Item number {i} in the list" for i in range(6)])
+        assert _detect_document_bullet_chars(raw) == {bullet}
+
     def test_common_single_letter_words_excluded_even_if_frequent(self):
         """"a"/"i"는 실제 영어 단어라 아무리 반복돼도 불릿으로 오인하면 안 된다."""
         raw = "\n".join([f"a book about topic {i}" for i in range(10)])

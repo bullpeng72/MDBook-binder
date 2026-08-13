@@ -53,8 +53,13 @@ _HYPHEN_BREAK_RE = re.compile(r"\w-$")
 # 문서별로 통계적으로 추론해 보완한다.
 _BULLET_MARKER_RE = re.compile(r"^(?:[•\-*◦‣]|\d+[.)]|[a-zA-Z][.)])\s")
 # _detect_document_bullet_chars() 후보 패턴 — 구두점 없이 알파벳 한 글자 +
-# 공백으로 시작하는 줄.
-_CANDIDATE_BULLET_RE = re.compile(r"^([A-Za-z])\s+\S")
+# 공백으로 시작하는 줄. 유니코드 사용자영역(U+E000~U+F8FF)도 후보에 넣는다 —
+# Word 등에서 만든 오래된 PDF는 Wingdings류 심볼 폰트의 불릿 글리프를
+# ToUnicode CMap으로 이 영역에 매핑하는 경우가 흔하다(실사용 PDF로 확인 —
+# 한 문서에서 3천 번 넘게 등장하는 불릿이 전혀 인식되지 않던 사례). 이
+# 영역의 문자는 애초에 실제 언어 문자가 아니므로 "a"/"i"처럼 정상 문장과
+# 오탐할 걱정 없이 그대로 후보로 써도 안전하다.
+_CANDIDATE_BULLET_RE = re.compile(r"^([A-Za-z-])\s+\S")
 # "a"/"i"는 실제 영어 단어("a book", "I think")라 문장 첫머리에 흔히 나온다 —
 # 아무리 자주 반복돼도 불릿 후보에서 제외해야 오탐(멀쩡한 문장을 불릿으로
 # 오인)을 피한다.
