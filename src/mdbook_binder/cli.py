@@ -30,7 +30,8 @@ _COLOR_HELP = "사이드바/제목 강조색 테마 (기본: book.yaml의 color 
   mdbook-binder build pdf ~/my-book --merge   # 3. (선택) 한 권으로 병합한 PDF
   mdbook-binder edit ~/my-book/my-book.html   # 4. (선택) 브라우저에서 섹션 단위 편집
 
-영문 PDF를 로컬 LLM으로 번역해 도서로 만들려면(토큰 비용 없음, Ollama 필요):
+영문 PDF를 로컬 LLM으로 번역해 도서로 만들려면(토큰 비용 없음, Ollama 필요,
+기본 모델: exaone3.5:7.8b — --model로 오버라이드 가능):
   mdbook-binder import pdf ~/book.pdf ~/corpus-en           # 5. PDF → 영문 코퍼스
   mdbook-binder translate ~/corpus-en ~/corpus-ko --direction e2k  # 6. 영→한 번역
   mdbook-binder build html ~/corpus-ko                       # 7. 위 2와 동일하게 빌드
@@ -326,12 +327,13 @@ def translate_cmd(
 ) -> None:
     """ROOT의 마크다운 코퍼스를 로컬 Ollama로 번역해 OUT_DIR에 미러링한다.
 
-    manifest.resolve()로 챕터를 걷어(exclude/order 규칙 그대로 적용) 순서대로
-    번역하고, 코드/mermaid/raw-HTML 블록은 번역하지 않고 그대로 보존한다.
-    book.yaml의 language 필드는 방향에 맞춰(k2e→en, e2k→ko) 재작성된다.
-    로컬 LLM 번역은 청크 하나에도 수십 초가 걸릴 수 있어 챕터·청크 단위
-    진행 상황을 출력한다. 모델이 없어도 자동으로 pull하지 않는다 —
-    `ollama pull <모델>`을 직접 실행해야 한다.
+    기본 모델은 exaone3.5:7.8b다(book.yaml의 translation.model 또는
+    --model로 오버라이드). manifest.resolve()로 챕터를 걷어(exclude/order
+    규칙 그대로 적용) 순서대로 번역하고, 코드/mermaid/raw-HTML 블록은
+    번역하지 않고 그대로 보존한다. book.yaml의 language 필드는 방향에
+    맞춰(k2e→en, e2k→ko) 재작성된다. 로컬 LLM 번역은 청크 하나에도 수십 초가
+    걸릴 수 있어 챕터·청크 단위 진행 상황을 출력한다. 모델이 없어도 자동으로
+    pull하지 않는다 — `ollama pull <모델>`을 직접 실행해야 한다.
     """
     from mdbook_binder.check import check_ollama
     from mdbook_binder.manifest import TranslationConfig
