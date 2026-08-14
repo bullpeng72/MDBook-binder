@@ -225,7 +225,9 @@ def detect_columns(
     # 평범한 단어 사이 공백(보통 6pt 미만)까지 거터로 오인할 수 있다 — 절대
     # 최소 폭(15pt, 일반 단어 간격보다 뚜렷이 넓은 값)을 함께 강제한다.
     absolute_min_pt = 15.0
-    gutter_min_bins = max(2, int(span * min_gutter_frac / bin_width), int(absolute_min_pt / bin_width))
+    gutter_min_bins = max(
+        2, int(span * min_gutter_frac / bin_width), int(absolute_min_pt / bin_width)
+    )
 
     gutters: list[float] = []
     run_start: int | None = None
@@ -253,7 +255,10 @@ def _assign_to_column(word: dict, columns: list[tuple[float, float]]) -> int:
     for i, (cs, ce) in enumerate(columns):
         if cs <= center <= ce:
             return i
-    return min(range(len(columns)), key=lambda i: min(abs(center - columns[i][0]), abs(center - columns[i][1])))
+    return min(
+        range(len(columns)),
+        key=lambda i: min(abs(center - columns[i][0]), abs(center - columns[i][1])),
+    )
 
 
 def _cluster_x_positions(xs: list[float], tolerance: float = 10.0) -> list[float]:
@@ -313,7 +318,9 @@ def detect_table(
         return None
 
     row_groups_list = [_row_groups(row, gap_threshold) for row in rows]
-    candidate_starts = [g["x0"] for groups in row_groups_list if len(groups) >= min_cols for g in groups]
+    candidate_starts = [
+        g["x0"] for groups in row_groups_list if len(groups) >= min_cols for g in groups
+    ]
     if not candidate_starts:
         return None
 
@@ -347,7 +354,9 @@ def detect_table(
 def _rows_to_table_markdown(rows: list[list[dict]], gap_threshold: float = 20.0) -> str:
     """detect_table()이 찾은 표 영역(rows)을 마크다운 파이프 표로 렌더링한다."""
     row_groups_list = [_row_groups(row, gap_threshold) for row in rows]
-    columns = _cluster_x_positions([g["x0"] for groups in row_groups_list for g in groups], tolerance=gap_threshold / 2)
+    columns = _cluster_x_positions(
+        [g["x0"] for groups in row_groups_list for g in groups], tolerance=gap_threshold / 2
+    )
     n_cols = len(columns)
 
     def cells_for(row: list[dict]) -> list[str]:
@@ -384,6 +393,77 @@ def _process_columns(words: list[dict]) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+_MAX_HEADING_RELATIVE_FREQUENCY = 0.15
+# 본문 크기(body_size) 문자 수 대비 이 비율을 넘게 등장하는 "본문보다 큰"
+# 폰트 크기는 헤딩이 아니라 또 다른 본문 스타일(강조 문단, 풀아웃 텍스트
+# 등)로 본다. 절대 비율(표본 전체 대비)이 아니라 본문 크기 대비 상대
+# 비율을 쓰는 이유는 문서 길이에 영향받지 않기 위해서다 — 표본이 작으면
+# (짧은 문서·테스트 픽스처) 진짜 헤딩 한두 개도 전체 대비 비율이 커 보일
+# 수 있지만, 본문 대비 비율은 문서 길이가 늘어나도 진짜 헤딩과 본문
+# 둘 다 비례해 늘어나므로 안정적이다. 실사용 PDF에서 11pt 본문 옆에
+# 13pt로 조판된 강조 문단이 11pt 문자 수의 약 20%에 달해, min_ratio만으로는
+# 그 문단 전체가 헤딩으로 오탐된 사례가 있었다 — 진짜 챕터 제목은 본문
+# 대비 극히 드물게(챕터당 한두 번) 나온다는 점을 이용해 걸러낸다.
+_ISOLATION_GAP_FACTOR = 1.8
+# 진짜 헤딩은 보통 위아래로 본문 줄 간격보다 뚜렷이 넓은 여백을 두고 배치된다
+# (제목 앞/뒤 마진). 같은 페이지 내 "정상적인" 줄 간격의 중앙값보다 이
+# 배수 이상 벌어진 줄만 고립된(=헤딩다운) 줄로 인정해, 큰 글자로 조판된
+# 문단이 여러 줄로 줄바꿈될 때 각 줄이 개별 헤딩 후보가 되는 것을 막는다.
+
+
+def calibrate_heading_sizes(
+    sizes: list[float],
+    body_size: float,
+    *,
+    min_ratio: float = 1.15,
+    max_relative_frequency: float = _MAX_HEADING_RELATIVE_FREQUENCY,
+) -> set[float]:
+    """본문보다 크면서도(min_ratio 이상) 본문 크기 대비 드문
+    (max_relative_frequency 이하) 폰트 크기만 "헤딩다운 크기"로 골라낸다(순수 함수).
+
+    calibrate_body_font_size()와 같은 표본을 0.5pt 단위로 묶어 크기별 등장
+    횟수를 구한 뒤, 크되 본문만큼(또는 그에 준하게) 흔한 크기(본문의 또
+    다른 스타일)는 제외한다. 본문 크기가 표본에 아예 없으면(이론상만
+    가능 — 정상적으로는 calibrate_body_font_size()가 그 표본의 최빈값을
+    반환하므로 항상 존재) 상대 비율을 계산할 근거가 없으므로 min_ratio
+    조건만 적용한다.
+    """
+    if not sizes:
+        return set()
+    rounded = [round(s * 2) / 2 for s in sizes]
+    counts = Counter(rounded)
+    threshold = body_size * min_ratio
+    body_count = counts.get(round(body_size * 2) / 2, 0)
+    if body_count == 0:
+        return {size for size, count in counts.items() if size >= threshold}
+    return {
+        size
+        for size, count in counts.items()
+        if size >= threshold and count / body_count <= max_relative_frequency
+    }
+
+
+def _row_gap_before(rows: list[list[dict]], i: int) -> float | None:
+    """rows[i]와 바로 앞 줄 사이의 수직 간격(공백)을 구한다. 첫 줄이거나
+    좌표 정보가 없으면 판단 불가로 None을 반환한다."""
+    if i == 0:
+        return None
+    prev_row, cur_row = rows[i - 1], rows[i]
+    if not prev_row or not cur_row:
+        return None
+    return min(w["top"] for w in cur_row) - max(w["bottom"] for w in prev_row)
+
+
+def _median_row_gap(rows: list[list[dict]]) -> float | None:
+    """페이지 안 모든 인접 줄 간격의 중앙값을 구한다 — "정상적인" 줄 간격의
+    기준선으로 쓴다. 이상치(헤딩 앞뒤 여백)에 평균보다 덜 흔들린다."""
+    gaps = sorted(g for i in range(1, len(rows)) if (g := _row_gap_before(rows, i)) is not None)
+    if not gaps:
+        return None
+    mid = len(gaps) // 2
+    return gaps[mid] if len(gaps) % 2 else (gaps[mid - 1] + gaps[mid]) / 2
+
+
 def detect_heading_rows(
     rows: list[list[dict]],
     body_size: float,
@@ -391,9 +471,10 @@ def detect_heading_rows(
     min_ratio: float = 1.15,
     max_words: int = 15,
     max_size_spread: float = 0.5,
+    heading_sizes: set[float] | None = None,
+    isolation_factor: float = _ISOLATION_GAP_FACTOR,
 ) -> set[int]:
-    """본문 폰트보다 눈에 띄게 큰(min_ratio 이상) 짧은 단독 줄을 챕터 제목
-    후보로 본다(순수 함수).
+    """본문 폰트보다 눈에 띄게 큰 짧은 단독 줄을 챕터 제목 후보로 본다(순수 함수).
 
     - 줄 안의 폰트 크기 편차가 max_size_spread를 넘으면(예: 본문 문장에
       큰 글자 하나가 섞인 경우 — 첫 글자 장식체 등) 제외한다. 헤딩은
@@ -404,8 +485,17 @@ def detect_heading_rows(
       구분하기 위함이다.
     - `size` 키가 없는 단어(예: _save_images_and_build_elements()가 만든
       이미지 참조 요소)만 있는 줄은 판단 근거가 없으므로 후보에서 제외한다.
+    - heading_sizes가 주어지면(calibrate_heading_sizes() 참고) 크기 판정을
+      min_ratio 비율 비교 대신 이 집합 소속 여부로 한다 — "크지만 흔한"
+      폰트 크기(강조 문단 등)를 배제하기 위함이다. None이면(표본 부족 등)
+      기존 min_ratio 비교로 폴백한다.
+    - 줄 앞의 수직 간격이 페이지 내 중앙값 줄 간격의 isolation_factor배에
+      못 미치면 제외한다 — 큰 글자로 조판된 문단이 여러 줄로 줄바꿈될 때
+      그 각 줄까지 헤딩 후보가 되는 것을 막는다. 첫 줄(비교 대상 없음)은
+      이 판정을 건너뛴다.
     """
     result: set[int] = set()
+    median_gap = _median_row_gap(rows)
     for i, row in enumerate(rows):
         if not row or len(row) > max_words:
             continue
@@ -414,12 +504,22 @@ def detect_heading_rows(
             continue
         if max(sizes) - min(sizes) > max_size_spread:
             continue
-        if (sum(sizes) / len(sizes)) >= body_size * min_ratio:
-            result.add(i)
+        avg_size = sum(sizes) / len(sizes)
+        if heading_sizes is not None:
+            if round(avg_size * 2) / 2 not in heading_sizes:
+                continue
+        elif avg_size < body_size * min_ratio:
+            continue
+        gap = _row_gap_before(rows, i)
+        if gap is not None and median_gap is not None and gap < median_gap * isolation_factor:
+            continue
+        result.add(i)
     return result
 
 
-def _mark_heading_words(words: list[dict], rows: list[list[dict]], heading_indices: set[int]) -> list[dict]:
+def _mark_heading_words(
+    words: list[dict], rows: list[list[dict]], heading_indices: set[int]
+) -> list[dict]:
     """감지된 헤딩 후보 줄마다 "##" 마커 요소를 그 줄 맨 앞에 끼워 넣는다.
 
     _save_images_and_build_elements()가 이미지를 "단어처럼 생긴" 요소로
@@ -437,14 +537,21 @@ def _mark_heading_words(words: list[dict], rows: list[list[dict]], heading_indic
         if not row:
             continue
         first = row[0]
-        markers.append({
-            "text": _HEADING_SENTINEL, "x0": first["x0"] - 1.0, "x1": first["x0"] - 0.5,
-            "top": first["top"], "bottom": first["bottom"],
-        })
+        markers.append(
+            {
+                "text": _HEADING_SENTINEL,
+                "x0": first["x0"] - 1.0,
+                "x1": first["x0"] - 0.5,
+                "top": first["top"],
+                "bottom": first["bottom"],
+            }
+        )
     return words + markers
 
 
-def _process_page(words: list[dict], body_size: float | None = None) -> str:
+def _process_page(
+    words: list[dict], body_size: float | None = None, heading_sizes: set[float] | None = None
+) -> str:
     """한 페이지의 단어들을 표 인식 + 컬럼 인식(읽기 순서 보정)을 거쳐 텍스트로 만든다.
 
     표 인식을 컬럼 분리보다 먼저, 페이지 전체 단어를 대상으로 수행한다 —
@@ -457,14 +564,16 @@ def _process_page(words: list[dict], body_size: float | None = None) -> str:
     body_size가 주어지면(문서 전체에서 calibrate_body_font_size()로 구한
     본문 폰트 크기) detect_heading_rows()로 챕터 제목 후보를 찾아 "## "
     마커를 붙인다 — 표 인식보다 먼저 해야 한다(마커 삽입으로 word 목록이
-    바뀌면 rows를 다시 구해야 표/컬럼 인식이 최신 상태를 본다).
+    바뀌면 rows를 다시 구해야 표/컬럼 인식이 최신 상태를 본다). heading_sizes는
+    calibrate_heading_sizes()가 구한 "드물게 등장하는 큰 크기" 집합을 그대로
+    detect_heading_rows()에 전달한다.
     """
     if not words:
         return ""
 
     rows = _group_into_rows(words)
     if body_size is not None:
-        heading_indices = detect_heading_rows(rows, body_size)
+        heading_indices = detect_heading_rows(rows, body_size, heading_sizes=heading_sizes)
         if heading_indices:
             words = _mark_heading_words(words, rows, heading_indices)
             rows = _group_into_rows(words)
@@ -492,7 +601,9 @@ def filter_garbled_words(words: list[dict]) -> list[dict]:
     return [w for w in words if not _CONTROL_CHAR_RE.search(w["text"])]
 
 
-def filter_page_number_words(words: list[dict], page_height: float, *, margin_frac: float = _PAGE_NUMBER_MARGIN_FRAC) -> list[dict]:
+def filter_page_number_words(
+    words: list[dict], page_height: float, *, margin_frac: float = _PAGE_NUMBER_MARGIN_FRAC
+) -> list[dict]:
     """페이지 상/하단 여백에 홀로 있는 순수 숫자 단어(쪽번호로 추정)를 제거한다(순수 함수).
 
     쪽번호는 페이지마다 값이 바뀌어(1, 2, 3...) strip_repeated_lines()(동일
@@ -511,7 +622,11 @@ def filter_page_number_words(words: list[dict], page_height: float, *, margin_fr
         if len(row) == 1:
             w = row[0]
             text = w["text"].strip()
-            if text.isdigit() and len(text) <= 4 and (w["top"] < top_margin or w["bottom"] > bottom_margin):
+            if (
+                text.isdigit()
+                and len(text) <= 4
+                and (w["top"] < top_margin or w["bottom"] > bottom_margin)
+            ):
                 continue
         result.extend(row)
     return result
@@ -553,7 +668,9 @@ def _sample_font_sizes(pdf, *, max_pages: int = 10) -> list[float]:
     return sizes
 
 
-def calibrate_body_font_size(sizes: list[float], *, min_samples: int = _MIN_FONT_SIZE_SAMPLES) -> float | None:
+def calibrate_body_font_size(
+    sizes: list[float], *, min_samples: int = _MIN_FONT_SIZE_SAMPLES
+) -> float | None:
     """문자 크기 표본에서 본문 폰트 크기(최빈값)를 추론한다(순수 함수).
 
     책 한 권 전체에서 가장 많은 글자 수를 차지하는 크기는 거의 항상 본문
@@ -572,7 +689,9 @@ def calibrate_body_font_size(sizes: list[float], *, min_samples: int = _MIN_FONT
     return Counter(rounded).most_common(1)[0][0]
 
 
-def calibrate_word_x_tolerance(gaps: list[float], *, default: float = _DEFAULT_X_TOLERANCE) -> float:
+def calibrate_word_x_tolerance(
+    gaps: list[float], *, default: float = _DEFAULT_X_TOLERANCE
+) -> float:
     """문자 간격 표본에서 "같은 단어 안"과 "단어 사이" 간격의 경계를 추론한다(순수 함수).
 
     pdfplumber의 기본 단어 구분 임계값(3pt)은 문서마다 실제 자간이 달라
@@ -641,16 +760,24 @@ def _collect_page_images(pdf, pdf_path: Path) -> list[list[dict]]:
                 continue
             if pos["width"] < _MIN_IMAGE_DIMENSION or pos["height"] < _MIN_IMAGE_DIMENSION:
                 continue
-            page_result.append({
-                "x0": pos["x0"], "x1": pos["x1"], "top": pos["top"], "bottom": pos["bottom"],
-                "data": pypdf_img.data, "ext": ext,
-                "hash": hashlib.md5(pypdf_img.data).hexdigest(),
-            })
+            page_result.append(
+                {
+                    "x0": pos["x0"],
+                    "x1": pos["x1"],
+                    "top": pos["top"],
+                    "bottom": pos["bottom"],
+                    "data": pypdf_img.data,
+                    "ext": ext,
+                    "hash": hashlib.md5(pypdf_img.data).hexdigest(),
+                }
+            )
         result.append(page_result)
     return result
 
 
-def _filter_repeated_images(pages_images: list[list[dict]], *, min_fraction: float = 0.5) -> list[list[dict]]:
+def _filter_repeated_images(
+    pages_images: list[list[dict]], *, min_fraction: float = 0.5
+) -> list[list[dict]]:
     """여러 페이지에 걸쳐 동일한 이미지(같은 바이트 해시)가 반복되면 제외한다(순수 함수).
 
     strip_repeated_lines()가 텍스트 러닝 헤더/푸터를 잡아내는 것과 같은
@@ -673,7 +800,9 @@ def _filter_repeated_images(pages_images: list[list[dict]], *, min_fraction: flo
     return [[img for img in page_imgs if img["hash"] not in repeated] for page_imgs in pages_images]
 
 
-def _save_images_and_build_elements(pages_images: list[list[dict]], images_dir: Path) -> list[list[dict]]:
+def _save_images_and_build_elements(
+    pages_images: list[list[dict]], images_dir: Path
+) -> list[list[dict]]:
     """이미지를 images_dir에 저장하고, 본문 흐름에 끼워 넣을 수 있는 "단어처럼
     생긴" 요소 목록으로 바꾼다.
 
@@ -691,12 +820,38 @@ def _save_images_and_build_elements(pages_images: list[list[dict]], images_dir: 
             filename = f"page{page_idx + 1:04d}_img{i + 1}.{img['ext']}"
             images_dir.mkdir(parents=True, exist_ok=True)
             (images_dir / filename).write_bytes(img["data"])
-            elements.append({
-                "text": f"![](images/{filename})",
-                "x0": img["x0"], "x1": img["x1"], "top": img["top"], "bottom": img["bottom"],
-            })
+            elements.append(
+                {
+                    "text": f"![](images/{filename})",
+                    "x0": img["x0"],
+                    "x1": img["x1"],
+                    "top": img["top"],
+                    "bottom": img["bottom"],
+                }
+            )
         result.append(elements)
     return result
+
+
+_MAX_HEADING_FRACTION_OF_ROWS = 0.05
+# 문서 전체 줄(row) 중 헤딩으로 감지된 비율이 이 값을 넘으면, 크기·희소성·
+# 고립 조건을 다 통과했더라도 이 문서에는 폰트 크기 기반 헤딩 감지라는
+# 전제 자체가 안 맞는다고 본다(예: 본문 타이포그래피가 유난히 불규칙한
+# 문서) — 안전장치로 감지를 통째로 무효화한다. 진짜 챕터/절 제목은
+# 페이지당 많아야 한두 개이므로, 전체 줄의 5%를 넘는 "헤딩"은 명백히
+# 과다 감지다.
+_MIN_ROWS_FOR_SANITY_CHECK = 50
+# 총 줄 수가 이보다 적으면(짧은 문서·단일 페이지) 헤딩 한두 개만으로도
+# 비율이 5%를 가볍게 넘을 수 있어 이 안전장치를 적용할 표본 자체가 안
+# 된다 — 그런 경우는 그냥 판정을 건너뛰고 앞선(크기·희소성·고립) 감지
+# 결과를 그대로 믿는다.
+
+
+def _headings_look_sane(heading_count: int, total_rows: int) -> bool:
+    """감지된 헤딩 비율이 상식적인 범위인지 확인한다(순수 함수)."""
+    if total_rows < _MIN_ROWS_FOR_SANITY_CHECK:
+        return True
+    return (heading_count / total_rows) <= _MAX_HEADING_FRACTION_OF_ROWS
 
 
 def extract_pdf_text(
@@ -715,29 +870,49 @@ def extract_pdf_text(
     마크다운 이미지 참조로 끼워 넣는다. None이면(기본값) 텍스트만 뽑는다.
 
     detect_headings=True(기본)면 문서 앞부분 표본으로 본문 폰트 크기를
-    추정해(calibrate_body_font_size()) 그보다 눈에 띄게 큰 짧은 줄을
-    챕터 제목 후보로 보고 "## " 마커를 붙인다(detect_heading_rows() 참고).
-    표본 부족 등으로 본문 크기를 못 정하면 전체가 조용히 건너뛴다.
+    추정해(calibrate_body_font_size()) 그보다 눈에 띄게 크면서도 드물게
+    등장하는(calibrate_heading_sizes()) 짧고 고립된 줄을 챕터 제목 후보로
+    보고 "## " 마커를 붙인다(detect_heading_rows() 참고). 표본 부족 등으로
+    본문 크기를 못 정하거나, 감지된 헤딩 비율이 비정상적으로 높으면
+    (_headings_look_sane()) 전체가 조용히 건너뛴다.
     """
     import pdfplumber
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         x_tolerance = calibrate_word_x_tolerance(_sample_char_gaps(pdf))
         body_size = calibrate_body_font_size(_sample_font_sizes(pdf)) if detect_headings else None
+        heading_sizes = (
+            calibrate_heading_sizes(_sample_font_sizes(pdf), body_size)
+            if body_size is not None
+            else None
+        )
 
         image_elements_per_page: list[list[dict]] = [[] for _ in pdf.pages]
         if images_dir is not None:
             pages_images = _filter_repeated_images(_collect_page_images(pdf, pdf_path))
             image_elements_per_page = _save_images_and_build_elements(pages_images, images_dir)
 
-        pages = []
+        words_per_page = []
         for page, img_elements in zip(pdf.pages, image_elements_per_page):
             words = page.extract_words(x_tolerance=x_tolerance, extra_attrs=["size"])
             words = filter_garbled_words(words)
             words = filter_page_number_words(words, page.height)
-            words = words + img_elements
-            pages.append(_process_page(words, body_size))
-        return pages
+            words_per_page.append(words + img_elements)
+
+        if body_size is not None:
+            total_headings = 0
+            total_rows = 0
+            for words in words_per_page:
+                rows = _group_into_rows(words)
+                total_headings += len(
+                    detect_heading_rows(rows, body_size, heading_sizes=heading_sizes)
+                )
+                total_rows += len(rows)
+            if not _headings_look_sane(total_headings, total_rows):
+                body_size = None
+                heading_sizes = None
+
+        return [_process_page(words, body_size, heading_sizes) for words in words_per_page]
 
 
 def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list[str]:
@@ -762,7 +937,9 @@ def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list
     if not repeated:
         return pages
 
-    return ["\n".join(ln for ln in page.split("\n") if ln.strip() not in repeated) for page in pages]
+    return [
+        "\n".join(ln for ln in page.split("\n") if ln.strip() not in repeated) for page in pages
+    ]
 
 
 def clean_paragraphs(raw_text: str) -> str:
@@ -820,7 +997,7 @@ def clean_paragraphs(raw_text: str) -> str:
         if _HEADING_LINE_RE.match(line):
             flush_prose()
             flush_block()
-            heading_text = line[len(_HEADING_SENTINEL):].strip()
+            heading_text = line[len(_HEADING_SENTINEL) :].strip()
             paragraphs.append(f"## {heading_text}")
             continue
 
