@@ -69,4 +69,13 @@ where = ["src"]
 # 파일들을 직접 읽거나 서빙하므로 반드시 wheel/sdist에 포함해야 한다.
 # templates/vendor/*(Tailwind/EasyMDE/marked/mermaid)는 CDN 대신 로컬
 # 번들로 서빙해 편집기가 오프라인/CDN 차단 환경에서도 동작하게 한다.
-mdbook_binder = ["templates/*", "templates/editor/*", "templates/vendor/*"]
+# templates/vendor/fonts/*는 vendor/* 글롭이 하위 디렉터리까지 재귀적으로
+# 잡지 않아 따로 나열해야 한다 — 빠뜨리면 wheel/sdist에서 Font Awesome
+# 웹폰트(.woff/.woff2)가 통째로 누락돼 CSS는 로드되는데 아이콘만 안 보이는
+# 상태(빈 사각형 tofu box)가 된다.
+mdbook_binder = [
+    "templates/*",
+    "templates/editor/*",
+    "templates/vendor/*",
+    "templates/vendor/fonts/*",
+]
