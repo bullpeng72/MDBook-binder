@@ -75,6 +75,12 @@ class TranslationConfig:
 
 
 @dataclass
+class SplitConfig:
+    files: list[str] = field(default_factory=list)
+    heading_level: int = 2
+
+
+@dataclass
 class BookConfig:
     title: str | None = None
     author: str | None = None
@@ -86,6 +92,7 @@ class BookConfig:
     custom_css: str | None = None
     color: str | None = None
     translation: TranslationConfig | None = None
+    split: SplitConfig | None = None
 
     @classmethod
     def load(cls, root: Path) -> BookConfig | None:
@@ -109,6 +116,8 @@ class BookConfig:
         callouts = data.get("callouts") or {}
         translation_data = data.get("translation")
         translation = TranslationConfig(**translation_data) if translation_data else None
+        split_data = data.get("split")
+        split = SplitConfig(**split_data) if split_data else None
 
         return cls(
             title=data.get("title"),
@@ -126,6 +135,7 @@ class BookConfig:
             custom_css=data.get("custom_css"),
             color=data.get("color"),
             translation=translation,
+            split=split,
         )
 
     def locale(self) -> dict[str, str]:
@@ -352,6 +362,30 @@ def _natural_sort_all(root: Path, config: BookConfig | None) -> list[ChapterFile
     all_md = [f for f in root.rglob("*.md") if not _is_excluded(f, exclude)]
     all_md.sort(key=_natural_sort_key)
     return [ChapterFile(path=f) for f in all_md]
+
+
+# ── 가상 분할(split) 대상 파일 해석 ──────────────────────────────────────────
+
+
+def resolve_split_targets(root: Path, config: BookConfig | None) -> set[Path]:
+    """book.yaml의 split.files 패턴에 매칭되는 파일들의 절대경로 집합을 반환한다.
+
+    html_book.py가 이 집합에 속한 챕터만 chapter_split.split_chapter_markdown()으로
+    빌드 시점에 여러 섹션으로 쪼갠다 — order.files와 동일한 glob 문법(리터럴
+    경로는 그대로, 와일드카드가 있으면 root.glob())을 써서 일관성을 유지한다.
+    """
+    if not config or not config.split or not config.split.files:
+        return set()
+
+    result: set[Path] = set()
+    for pattern in config.split.files:
+        matches = (
+            root.glob(pattern) if any(ch in pattern for ch in "*?[") else [root / pattern]
+        )
+        for m in matches:
+            if m.exists():
+                result.add(m.resolve())
+    return result
 
 
 # ── 진입점 ────────────────────────────────────────────────────────────────────

@@ -4,14 +4,18 @@ from pathlib import Path
 
 from mdbook_binder.manifest import TIER_NATURAL_SORT, resolve_verbose
 from mdbook_binder.pdf_import import (
+    _HEADING_SENTINEL,
     _detect_document_bullet_chars,
     _filter_repeated_images,
     _group_into_rows,
+    _mark_heading_words,
     _row_groups,
     _save_images_and_build_elements,
+    calibrate_body_font_size,
     calibrate_word_x_tolerance,
     clean_paragraphs,
     detect_columns,
+    detect_heading_rows,
     detect_table,
     filter_garbled_words,
     filter_page_number_words,
@@ -78,6 +82,39 @@ def _make_positioned_pdf(placements: list[tuple[str, float, float]]) -> bytes:
     for text, x, y in placements:
         ops.append(f"1 0 0 1 {x} {y} Tm ({text}) Tj")
     ops.append("ET")
+    stream = "\n".join(ops).encode("latin-1")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R >> >> "
+            b"/MediaBox [0 0 612 792] /Contents 5 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref_offset = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for off in offsets[1:]:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF".encode()
+    return bytes(out)
+
+
+def _make_pdf_with_font_sizes(placements: list[tuple[str, float, float, float]]) -> bytes:
+    """(텍스트, x, y, 폰트크기) 배치를 받아 최소 유효 PDF를 만든다 — 챕터
+    제목 후보 감지(폰트 크기 기반)를 검증하려면 줄마다 다른 크기가 필요한데
+    `_make_positioned_pdf()`는 고정 12pt만 지원해 이 용도로 못 쓴다."""
+    ops = []
+    for text, x, y, size in placements:
+        ops.append(f"BT /F1 {size} Tf 1 0 0 1 {x} {y} Tm ({text}) Tj ET")
     stream = "\n".join(ops).encode("latin-1")
 
     objects = [
@@ -239,6 +276,85 @@ class TestCleanParagraphs:
         오인해 단락을 끊지 않는다."""
         raw = "The value is\n-5 degrees today."
         assert clean_paragraphs(raw) == "The value is -5 degrees today."
+
+    def test_heading_sentinel_converted_to_real_h2_and_kept_standalone(self):
+        """_mark_heading_words()가 붙인 센티널은 하드랩 해제 대상이 아니고,
+        최종 마크다운에는 진짜 "## "로 남아야 한다."""
+        raw = f"Intro paragraph.\n{_HEADING_SENTINEL} Chapter One\nBody after heading."
+        assert clean_paragraphs(raw) == (
+            "Intro paragraph.\n\n## Chapter One\n\nBody after heading."
+        )
+
+    def test_literal_hash_run_from_raw_pdf_text_still_escaped(self):
+        """센티널이 아니라 원문 PDF 텍스트에 우연히 등장한 "##"(예: 해시태그)은
+        여전히 이스케이프된다 — 헤딩 감지 마커와 혼동되면 안 된다(회귀 대상)."""
+        raw = "## Not a real heading either"
+        assert clean_paragraphs(raw) == "\\## Not a real heading either"
+
+
+class TestHeadingDetection:
+    def test_row_with_much_larger_font_is_a_heading_candidate(self):
+        rows = [[_word("Chapter", 72, 100)], [_word("Body text here.", 72, 130)]]
+        rows[0][0]["size"] = 20.0
+        rows[1][0]["size"] = 12.0
+
+        assert detect_heading_rows(rows, body_size=12.0) == {0}
+
+    def test_row_close_in_size_to_body_is_not_a_heading(self):
+        rows = [[_word("Slightly bigger", 72, 100)]]
+        rows[0][0]["size"] = 13.0
+
+        assert detect_heading_rows(rows, body_size=12.0) == set()
+
+    def test_long_row_even_with_large_font_is_not_a_heading(self):
+        """진짜 헤딩은 짧다 — 강조 인용문처럼 폰트만 크고 긴 문단은 제외한다."""
+        words = [_word(f"word{i}", 72 + i * 40, 100) for i in range(20)]
+        for w in words:
+            w["size"] = 20.0
+
+        assert detect_heading_rows([words], body_size=12.0) == set()
+
+    def test_mixed_size_row_is_not_a_heading(self):
+        """줄 안에 큰 글자와 작은 글자가 섞여 있으면(장식 첫 글자 등) 헤딩으로 보지 않는다."""
+        w1, w2 = _word("D", 72, 100), _word("rop cap paragraph", 90, 100)
+        w1["size"] = 24.0
+        w2["size"] = 12.0
+
+        assert detect_heading_rows([[w1, w2]], body_size=12.0) == set()
+
+    def test_row_without_size_info_is_not_a_heading(self):
+        """이미지 참조처럼 size 키가 없는 요소만 있는 줄은 판단 근거가 없어 제외한다."""
+        image_element = {"text": "![](images/x.png)", "x0": 72, "x1": 90, "top": 100, "bottom": 112}
+        assert detect_heading_rows([[image_element]], body_size=12.0) == set()
+
+    def test_mark_heading_words_prepends_sentinel_at_row_start(self):
+        heading_word = _word("Chapter One", 72, 100)
+        rows = [[heading_word]]
+
+        marked = _mark_heading_words([heading_word], rows, {0})
+
+        assert len(marked) == 2
+        marker = next(w for w in marked if w["text"] == _HEADING_SENTINEL)
+        assert marker["x0"] < heading_word["x0"]
+
+    def test_mark_heading_words_no_indices_returns_words_unchanged(self):
+        words = [_word("Body", 72, 100)]
+        assert _mark_heading_words(words, [words], set()) is words
+
+
+class TestCalibrateBodyFontSize:
+    def test_most_common_size_wins_over_a_few_large_headings(self):
+        sizes = [12.0] * 40 + [20.0] * 3
+        assert calibrate_body_font_size(sizes) == 12.0
+
+    def test_too_few_samples_returns_none(self):
+        assert calibrate_body_font_size([12.0, 12.0]) is None
+
+    def test_close_sizes_bucketed_to_same_value(self):
+        """부동소수 오차로 미세하게 다른 크기(11.9/12.0/12.1 등)도 0.5pt
+        단위로 묶여 같은 본문 크기로 집계돼야 한다."""
+        sizes = [11.9, 12.0, 12.1, 11.95, 12.05] * 6
+        assert calibrate_body_font_size(sizes) == 12.0
 
 
 class TestGroupIntoRows:
@@ -527,6 +643,54 @@ def test_import_pdf_writes_minimal_book_yaml_with_english_language(tmp_path: Pat
     out_dir = tmp_path / "corpus"
 
     import_pdf(pdf_path, out_dir)
+
+    import yaml
+
+    data = yaml.safe_load((out_dir / "book.yaml").read_text(encoding="utf-8"))
+    assert data == {"language": "en"}
+
+
+def test_import_pdf_detects_larger_font_heading_and_enables_split(tmp_path: Path):
+    """본문보다 눈에 띄게 큰 짧은 줄은 챕터 제목 후보로 감지돼 "## " 마커가
+    붙고, book.yaml에 split 설정이 자동으로 생겨 바로 build html만 돌려도
+    사이드바가 챕터별로 나뉘게 해야 한다."""
+    placements = [
+        ("Chapter One", 72, 700, 24),
+        ("This is the first body paragraph with plenty of words for font size calibration sampling.", 72, 670, 12),
+        ("Another body sentence here to make sure enough character samples exist for calibration.", 72, 650, 12),
+    ]
+    pdf_path = tmp_path / "book.pdf"
+    pdf_path.write_bytes(_make_pdf_with_font_sizes(placements))
+    out_dir = tmp_path / "corpus"
+
+    md_path = import_pdf(pdf_path, out_dir)
+    body = md_path.read_text(encoding="utf-8")
+
+    assert "## Chapter One" in body
+
+    import yaml
+
+    data = yaml.safe_load((out_dir / "book.yaml").read_text(encoding="utf-8"))
+    assert data == {"language": "en", "split": {"files": [md_path.name], "heading_level": 2}}
+
+
+def test_import_pdf_detect_chapter_headings_false_skips_detection(tmp_path: Path):
+    """--no-headings(= detect_chapter_headings=False)를 주면 폰트 크기가
+    달라도 헤딩을 감지하지 않고 기존 동작(단일 섹션) 그대로여야 한다."""
+    placements = [
+        ("Chapter One", 72, 700, 24),
+        ("This is the first body paragraph with plenty of words for font size calibration sampling.", 72, 670, 12),
+        ("Another body sentence here to make sure enough character samples exist for calibration.", 72, 650, 12),
+    ]
+    pdf_path = tmp_path / "book.pdf"
+    pdf_path.write_bytes(_make_pdf_with_font_sizes(placements))
+    out_dir = tmp_path / "corpus"
+
+    md_path = import_pdf(pdf_path, out_dir, detect_chapter_headings=False)
+    body = md_path.read_text(encoding="utf-8")
+
+    assert "## Chapter One" not in body
+    assert "Chapter One" in body
 
     import yaml
 

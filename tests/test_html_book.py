@@ -4,6 +4,7 @@ import unicodedata
 from pathlib import Path
 
 from mdbook_binder.html_book import _slugify, build_html
+from mdbook_binder.manifest import BookConfig, SplitConfig
 
 
 def _write(root: Path, rel: str, content: str) -> Path:
@@ -154,3 +155,85 @@ def test_cross_chapter_link_survives_nfc_nfd_mismatch(tmp_path: Path):
 
     assert '<a href="#' in body, "한글 파일명 상호참조가 앵커로 바뀌지 않음(NFC/NFD 불일치 회귀)"
     assert ".md" not in body
+
+
+class TestSplitConfigBuildsMultipleSections:
+    def test_single_file_with_h2s_produces_one_section_per_chapter(self, tmp_path: Path):
+        """import 직후 같은 단일 파일도 book.yaml split.files만 지정하면
+        파일을 물리적으로 쪼개지 않고도 사이드바 섹션이 챕터 수만큼 생겨야 한다."""
+        _write(
+            tmp_path,
+            "My_Book.md",
+            "# 나의 책\n\n## 1장 서론\n\n1장 본문.\n\n## 2장 본론\n\n2장 본문.\n",
+        )
+        config = BookConfig(split=SplitConfig(files=["My_Book.md"]))
+
+        out = build_html(tmp_path, config, out_path=tmp_path / "out.html")
+        html = out.read_text(encoding="utf-8")
+
+        assert html.count('class="chapter-section"') == 2
+        assert "1장 본문." in html
+        assert "2장 본문." in html
+
+    def test_split_chapters_grouped_under_original_title_as_part_heading(self, tmp_path: Path):
+        _write(
+            tmp_path,
+            "My_Book.md",
+            "# 나의 책\n\n## 1장\n\n본문1.\n\n## 2장\n\n본문2.\n",
+        )
+        config = BookConfig(split=SplitConfig(files=["My_Book.md"]))
+
+        out = build_html(tmp_path, config, out_path=tmp_path / "out.html")
+        html = out.read_text(encoding="utf-8")
+        toc = html.split('id="toc">', 1)[1].split("</div>", 1)[0]
+
+        assert '<a class="part-heading">나의 책</a>' in toc
+        assert toc.count('class="chapter toc-link"') == 2
+
+    def test_file_without_matching_heading_level_is_not_split(self, tmp_path: Path):
+        """split.files에 등록됐어도 H2가 없으면 기존(파일 1개=섹션 1개) 그대로다."""
+        _write(tmp_path, "My_Book.md", "# 나의 책\n\n헤딩 없이 본문만 있음.\n")
+        config = BookConfig(split=SplitConfig(files=["My_Book.md"]))
+
+        out = build_html(tmp_path, config, out_path=tmp_path / "out.html")
+        html = out.read_text(encoding="utf-8")
+
+        assert html.count('class="chapter-section"') == 1
+
+    def test_file_not_listed_in_split_files_is_unaffected(self, tmp_path: Path):
+        """다른 코퍼스에 정상적으로 존재하는 파일이 split 대상이 아니면
+        내부에 H2가 있어도(정상적인 챕터 내 소제목) 쪼개지지 않는다."""
+        _write(
+            tmp_path,
+            "chapter.md",
+            "# 챕터\n\n## 소제목\n\n일반적인 챕터 내부 구조.\n",
+        )
+        config = BookConfig(split=SplitConfig(files=["other.md"]))
+
+        out = build_html(tmp_path, config, out_path=tmp_path / "out.html")
+        html = out.read_text(encoding="utf-8")
+
+        assert html.count('class="chapter-section"') == 1
+
+    def test_no_split_config_leaves_default_behavior_unchanged(self, tmp_path: Path):
+        _write(tmp_path, "chapter.md", "# 챕터\n\n## 소제목\n\n본문.\n")
+
+        out = build_html(tmp_path, config=None, out_path=tmp_path / "out.html")
+        html = out.read_text(encoding="utf-8")
+
+        assert html.count('class="chapter-section"') == 1
+
+    def test_cross_reference_to_split_file_anchors_to_first_piece(self, tmp_path: Path):
+        _write(
+            tmp_path,
+            "My_Book.md",
+            "# 나의 책\n\n## 1장\n\n본문1.\n\n## 2장\n\n본문2.\n",
+        )
+        _write(tmp_path, "other.md", "# 다른 챕터\n\n[나의 책](./My_Book.md) 참고.\n")
+        config = BookConfig(split=SplitConfig(files=["My_Book.md"]))
+
+        out = build_html(tmp_path, config, out_path=tmp_path / "out.html")
+        html = out.read_text(encoding="utf-8")
+        body = html.split('<main id="main">', 1)[1]
+
+        assert '<a href="#1장"' in body

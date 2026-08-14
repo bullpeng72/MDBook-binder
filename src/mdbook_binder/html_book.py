@@ -16,8 +16,15 @@ import unicodedata
 from html import escape as _html_escape
 from pathlib import Path
 
+from mdbook_binder.chapter_split import split_chapter_markdown
 from mdbook_binder.imgembed import image_to_data_uri
-from mdbook_binder.manifest import LOCALE_STRINGS, BookConfig, ChapterFile, resolve
+from mdbook_binder.manifest import (
+    LOCALE_STRINGS,
+    BookConfig,
+    ChapterFile,
+    resolve,
+    resolve_split_targets,
+)
 from mdbook_binder.mermaid_prerender import (
     mermaid_font_face_css,
     mermaid_label_css,
@@ -47,6 +54,14 @@ def _slugify(text: str) -> str:
     base = re.sub(r"[^\w\s-]", "", base, flags=re.UNICODE).strip().lower()
     slug = re.sub(r"[\s_]+", "-", base)
     return slug or "section"
+
+
+_RAW_H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+
+
+def _extract_raw_h1(text: str) -> str | None:
+    m = _RAW_H1_RE.search(text)
+    return m.group(1).strip() if m else None
 
 
 def _section_id(fpath: Path, html_body: str, config: BookConfig | None) -> str:
@@ -151,6 +166,9 @@ def build_html(
     language = language_override or (config.language if config else "ko")
     locale = LOCALE_STRINGS.get(language, LOCALE_STRINGS["ko"])
 
+    split_targets = resolve_split_targets(root, config)
+    split_level = config.split.heading_level if config and config.split else 2
+
     sections: list[str] = []
     toc_entries: list[str] = []
     last_part: str | None = None
@@ -164,13 +182,29 @@ def build_html(
     for chap in chapters:
         print(f"  \U0001f4c4 {chap.path.relative_to(root)}")
         raw = chap.path.read_text(encoding="utf-8")
-        html_body = md_to_html(raw, tip_pattern)
-        html_body = _embed_images_as_data_uri(html_body, chap.path.parent, missing_images)
 
-        sid = _dedupe_slug(_section_id(chap.path, html_body, config), seen_slugs)
-        title_text = extract_h1_text(html_body) or chap.path.stem
-        path_to_sid[unicodedata.normalize("NFC", str(chap.path.resolve()))] = sid
-        rendered.append((chap, sid, title_text, html_body))
+        is_split_target = chap.path.resolve() in split_targets
+        pieces = split_chapter_markdown(raw, split_level) if is_split_target else [raw]
+        # split.files에 등록됐어도 실제로 지정 레벨 헤딩이 없으면 pieces는
+        # [raw] 그대로라 group_label도 None — 기존(파일 1개=섹션 1개) 동작과
+        # 완전히 동일하게 폴백된다.
+        group_label = _extract_raw_h1(raw) if is_split_target and len(pieces) > 1 else None
+
+        chap_key = unicodedata.normalize("NFC", str(chap.path.resolve()))
+        for piece in pieces:
+            html_body = md_to_html(piece, tip_pattern)
+            html_body = _embed_images_as_data_uri(html_body, chap.path.parent, missing_images)
+
+            sid = _dedupe_slug(_section_id(chap.path, html_body, config), seen_slugs)
+            title_text = extract_h1_text(html_body) or chap.path.stem
+            # 한 파일이 여러 섹션으로 쪼개져도, 그 파일을 가리키는 상호참조
+            # 앵커는 첫 조각(진입점)으로만 연결한다 — _rewrite_internal_links()
+            # 계약대로 파일 단위 매핑만 지원하므로.
+            if chap_key not in path_to_sid:
+                path_to_sid[chap_key] = sid
+
+            piece_chap = ChapterFile(path=chap.path, part_label=group_label or chap.part_label)
+            rendered.append((piece_chap, sid, title_text, html_body))
 
     # 2패스 — 이제 코퍼스 전체의 path→sid가 확정됐으므로 챕터 간 상호참조
     # 링크를 #앵커로 재작성한다.
@@ -228,7 +262,8 @@ def build_html(
     out = out_path or (root / f"{_slugify(title)}.html")
     out.write_text(html, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
-    print(f"\n✅ Done: {out}  ({size_kb} KB, {len(chapters)}개 파일)")
+    file_note = f"{len(chapters)}개 파일" if len(sections) == len(chapters) else f"{len(chapters)}개 파일 → {len(sections)}개 섹션"
+    print(f"\n✅ Done: {out}  ({size_kb} KB, {file_note})")
 
     if missing_images:
         print(f"\n⚠️  누락된 이미지 {len(missing_images)}건 (원본 src 그대로 유지됨):")

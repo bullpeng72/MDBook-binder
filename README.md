@@ -70,6 +70,7 @@ flowchart TD
     C --> E["pdf_book.py\nPlaywright 청크 캡처\n개별 PDF / --merge 단권"]
     D --> F["editor/\nLectureHTMLEditor·ImageEditor 포크\n(lecture-forge 비의존)"]
     G["check.py\n빌드 전 사전 점검"] -.-> B
+    D -.book.yaml split 설정 시.-> H["chapter_split.py\nH2 경계로 파일 하나를\n여러 가상 챕터로 분할"]
 
     style D fill:#4527a0,color:#fff
     style E fill:#00897b,color:#fff
@@ -108,9 +109,10 @@ MDBook-binder/
 ├── LICENSE
 ├── README.md
 ├── src/mdbook_binder/
-│   ├── manifest.py           # BookConfig(book.yaml) + resolve()/resolve_verbose()
+│   ├── manifest.py           # BookConfig(book.yaml) + resolve()/resolve_verbose()/resolve_split_targets()
+│   ├── chapter_split.py      # book.yaml split 설정 시 H2 경계로 파일 하나를 여러 가상 챕터로 분할
 │   ├── render.py             # md_to_html / demote_headings / 콜아웃·로케일
-│   ├── html_book.py          # HTML 도서 빌더 (사이드바/검색/base64 이미지)
+│   ├── html_book.py          # HTML 도서 빌더 (사이드바/검색/base64 이미지/가상 분할)
 │   ├── imgembed.py           # 이미지 → base64 data URI 인코딩 공용 유틸
 │   ├── mermaid_prerender.py  # Mermaid 빌드 타임 정적 SVG 사전 렌더링 (Playwright)
 │   ├── mermaid_wrap.py       # Mermaid 노드/엣지 라벨 자동 줄바꿈
@@ -131,16 +133,17 @@ MDBook-binder/
 │       ├── vendor/              # 번들: mermaid.min.js·Noto Sans KR 폰트·Tailwind·EasyMDE·Font Awesome·marked.js(오프라인용)
 │       └── editor/              # 편집 SPA (index.html/editor.css/editor.js)
 └── tests/
-    ├── test_cli.py               # CLI 옵션 배선·에러 메시지 (13건)
-    ├── test_manifest.py          # 3단계 순서 해석 (12건)
-    ├── test_html_book.py         # 섹션 id 충돌 회피·이미지 임베드·챕터 간 링크 재작성 (12건)
+    ├── test_cli.py               # CLI 옵션 배선·에러 메시지 (14건)
+    ├── test_manifest.py          # 3단계 순서 해석 + split 설정 파싱/해석 (20건)
+    ├── test_chapter_split.py     # H2 경계 탐지·분할(펜스/raw HTML/blockquote 보호) (9건)
+    ├── test_html_book.py         # 섹션 id 충돌 회피·이미지 임베드·챕터 간 링크 재작성·가상 분할 (18건)
     ├── test_check.py             # 사전 점검 + 설치 환경 점검 (13건)
     ├── test_editor.py            # 이미지 추가/교체 후 base64 임베드 (2건)
     ├── test_mermaid_prerender.py # Mermaid 사전 렌더링 성공/폴백 (6건)
     ├── test_mermaid_wrap.py      # 라벨 자동 줄바꿈 (12건)
     ├── test_theme.py             # 색상 테마 프리셋 + book.yaml/--color 연동 (8건)
     ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 (20건)
-    ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 순수 함수 + 통합 (71건)
+    ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 + 폰트 크기 기반 헤딩 감지 (85건)
     ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭·k2e 재시도 (38건)
     └── test_server.py            # 웹 에디터 Flask API (12건)
 ```
@@ -192,6 +195,10 @@ custom_css: custom.css       # 코퍼스 루트 기준 상대 경로 (선택)
 color: green                 # 사이드바/제목 강조색 테마 (선택, 기본 purple)
                               # purple/blue/green/teal/red/orange/gray 중 하나.
                               # CLI --color를 주면 이 값보다 우선한다.
+
+split:                       # 단일 파일도 빌드 시점에 여러 사이드바 섹션으로
+  files: [My_Book.md]        # 쪼갠다(소스 파일은 그대로 둠). 자세한 건
+  heading_level: 2            # "import 결과물을 챕터별로 분리하기" 참고.
 ```
 
 ### 마크다운 저작 규칙
@@ -238,15 +245,6 @@ color: green                 # 사이드바/제목 강조색 테마 (선택, 기
 
 챕터 초안을 AI에게 맡기면 위 [마크다운 저작 규칙](#마크다운-저작-규칙)을 모르는
 채로 써서 `check`/빌드 시점에야 문제가 드러나기 쉽다.
-
-> ⚠️ **"README를 읽어라"는 지시로는 부족하다.** mdbook-binder는 `pip`/`pipx`로
-> 설치하는 **별도의 CLI 도구**이고, 실제로 챕터를 쓰는 곳은 이 저장소가 아니라
-> **완전히 별개인 사용자 자신의 책 코퍼스 저장소**다 — 그 저장소에는
-> mdbook-binder의 소스도, 이 README.md도 존재하지 않는다. 그래서 AI에게 "이
-> README의 저작 규칙 절을 읽고 따르라"고만 지시하는 스킬/프롬프트는 실제
-> 작업 디렉토리에 그 파일이 없어 참조가 실패한다. 규칙은 **코퍼스 저장소
-> 안에서 self-contained하게(파일을 다시 열어보지 않아도 되도록) 담아둬야**
-> 한다.
 
 **Claude Code — self-contained Skill 설치.** 규칙 본문을 스킬 안에 직접 담아
 파일로 저장해두면 된다. **어디에 저장하느냐에 따라 적용 범위가 갈린다**:
@@ -421,7 +419,7 @@ mdbook-binder edit <html_경로> [--port 5757] [--out edited.html] [--no-browser
 ### PDF 임포트 — import
 
 ```bash
-mdbook-binder import <PDF_경로> <출력_디렉토리> [--title TEXT] [--no-images]
+mdbook-binder import <PDF_경로> <출력_디렉토리> [--title TEXT] [--no-images] [--no-headings]
 ```
 
 `pip install "mdbook-binder[pdf]"`(pdfplumber/pypdf/pillow)가 필요하다.
@@ -438,6 +436,7 @@ docx 등 다른 포맷 문서는 PDF로 변환(워드프로세서의 "PDF로 저
 | `OUT_DIR` (필수) | 마크다운 코퍼스를 생성할 디렉토리 | — |
 | `--title TEXT` | 제목/파일명 오버라이드 | PDF 파일명 |
 | `--no-images` | 이미지 추출 없이 텍스트만 뽑는다 | 이미지 추출함 |
+| `--no-headings` | 폰트 크기 기반 챕터 제목 자동 감지를 끈다 | 감지함 |
 
 **동작**
 
@@ -450,52 +449,72 @@ docx 등 다른 포맷 문서는 PDF로 변환(워드프로세서의 "PDF로 저
   위치에 마크다운 이미지 참조로 끼워 넣는다(`--no-images`로 끌 수 있음)
   — 너무 작은 장식용 이미지와 여러 페이지에 반복되는 로고/아이콘은
   자동으로 제외한다.
-- 전체 PDF를 파일 하나로 추출한다 — 챕터 자동 분리는 아직 지원하지
-  않는다. 결과는 그 자체로 `build html`/`build pdf`/`translate`가 바로
-  받는 유효한 코퍼스다(자연정렬 폴백이 단일 파일 코퍼스도 그대로 받는다).
+- **챕터 제목 후보를 폰트 크기로 자동 감지한다.** 문서 앞부분 표본으로
+  본문 폰트 크기의 최빈값을 구하고, 그보다 눈에 띄게(기본 1.15배 이상)
+  큰 짧은 단독 줄을 챕터/절 제목으로 보고 `## ` 마커를 붙인다. 하나라도
+  감지되면 `book.yaml`에 `split: {files: [<파일명>], heading_level: 2}`를
+  자동으로 써서, 바로 이어서 `build html`만 돌려도 [가상
+  분할](#import-결과물을-챕터별로-분리하기--사이드바-챕터-링크-만들기)이
+  적용돼 사이드바가 챕터별로 나뉜다. 폰트 크기 신호가 불충분하거나
+  (표본 부족, 본문과 헤딩 크기가 거의 같은 문서) 아무것도 못 찾으면
+  기존과 동일하게 `language`만 있는 `book.yaml`을 쓴다. 휴리스틱이라
+  경계가 부정확할 수 있다 — `--no-headings`로 끄거나, 감지 결과를
+  `.md` 파일의 `## ` 마커를 직접 손으로 고친 뒤(파일을 물리적으로 쪼갤
+  필요 없음) 다시 빌드하면 된다.
+- 전체 PDF를 파일 하나로 추출한다 — Part_/Chapter_ 명명 규칙에 맞춘
+  실제 파일 자동 분할은 아직 지원하지 않는다. 결과는 그 자체로 `build
+  html`/`build pdf`/`translate`가 바로 받는 유효한 코퍼스다(자연정렬
+  폴백이 단일 파일 코퍼스도 그대로 받는다).
 - 텍스트 레이어가 없는 스캔 PDF(이미지로만 구성된 PDF)는 지원하지
   않는다 — OCR 기능은 없다.
 
 ### import 결과물을 챕터별로 분리하기 — 사이드바 챕터 링크 만들기
 
-`import`는 PDF 전체를 **단일 마크다운 파일 하나**로 추출한다(챕터 자동
-분리 미지원 — [알려진 한계](#알려진-한계) 참고). 빌드된 HTML의 사이드바
-항목은 **마크다운 파일 하나당 하나**씩 생긴다(`html_book.py`가 챕터 파일
-목록을 그대로 `<section id="{slug}">`로 매핑) — 그래서 import 직후
-상태로 바로 빌드하면 사이드바에는 책 전체를 가리키는 항목 하나만 뜬다.
-챕터마다 "챕터명 (링크)"를 사이드바에 만들려면 **소스 마크다운을 파일
-단위로 쪼개야 한다.** 방법은 아래 두 가지이지만, 실제로 새 사이드바
-항목을 만드는 것은 1번뿐이다.
+`import`는 PDF 전체를 **단일 마크다운 파일 하나**로 추출한다(Part_/
+Chapter_ 명명 규칙에 맞춘 실제 파일 자동 분할은 미지원 — [알려진
+한계](#알려진-한계) 참고). 사이드바 항목은 기본적으로 **마크다운 파일
+하나당 하나**씩 생기지만, `import`가 [폰트 크기로 챕터 제목을 자동
+감지](#pdf-임포트--import)해 `book.yaml`에 `split` 설정까지 함께
+쓰므로 대부분의 PDF는 **추가 조치 없이 `build html`만 다시 돌려도**
+챕터별로 나뉜다. 감지가 안 됐거나 경계가 부정확하면 아래 방법으로
+직접 만들거나 고친다.
 
-**1. 마크다운 직접 편집(새 챕터/사이드바 항목을 만드는 유일한 방법)**
+**1. `book.yaml`의 `split` — 파일은 그대로, 빌드 시점에만 쪼갠다(권장)**
 
-1. `import`가 만든 `<출력_디렉토리>/<제목>.md`를 에디터로 연다.
-2. 원래 PDF의 장/절에 해당하는 H2(또는 상위 헤딩) 경계마다 파일을 잘라
-   별도 `.md`로 저장한다. 잘라낸 각 파일은 [마크다운 저작
-   규칙](#마크다운-저작-규칙)대로 **H1 하나로 시작해야 한다** — 원래
-   H2였던 제목을 H1로 올린다.
-3. 파일명을 `Part_I_.../Chapter_01_제목.md`처럼 명명 규칙에 맞추면 순서가
-   자동 인식된다(2순위 규칙). 규칙을 따르지 않는 이름이라면
-   `book.yaml`의 `order.files`로 순서를 직접 나열한다.
-4. 이미지 참조(`![](images/foo.png)`)는 새 파일들이 원본과 **같은
-   디렉토리**에 남아 있으면 그대로 유효하다 — 하위 디렉토리로 옮겼다면
-   `../images/foo.png`처럼 상대경로를 다시 맞춘다.
-5. `mdbook-binder check <root>`로 순서·누락 이미지를 확인한 뒤
-   `mdbook-binder build html <root>`로 다시 빌드하면, 파일마다 하나씩
-   생긴 섹션이 사이드바에 "챕터명 (링크)"로 나타난다.
+```yaml
+split:
+  files: [My_Book.md]   # order.files와 동일한 glob 문법
+  heading_level: 2         # 기본값 2(= "## "). 생략 가능
+```
 
-**2. `edit` 웹 에디터 — 기존 챕터를 다듬는 용도이지, 새 챕터를 만드는
-기능은 없다**
+소스를 건드리지 않고 지정 헤딩 레벨(기본 H2) 경계마다 섹션을 나눠
+사이드바에 "챕터명 (링크)"로 보여준다. H2는 각 조각의 H1로 자동
+승격되고, 펜스 코드·`@@HTML_START@@` raw HTML·blockquote 코드펜스
+안의 `## `는 경계로 오인하지 않는다. 쪼개진 챕터는 원본 제목을 Part
+헤딩으로 묶어 들여쓰기로 표시된다. 해당 레벨 헤딩이 없으면 조용히
+기존 동작(파일 1개 = 섹션 1개)으로 폴백하고, 되돌리려면 `split` 블록만
+지우면 된다. 단, 그 파일을 가리키는 상호참조 링크는 **첫 조각으로만**
+연결된다(파일 단위로만 앵커를 추적하는 기존 계약 — [HTML 도서
+빌드](#html-도서-빌드) 참고) — 특정 하위 챕터로 바로 연결하려면 2번처럼
+실제 파일을 쪼갠다.
 
-`edit`는 이미 빌드된 HTML의 **기존 섹션**만 다룬다: 섹션 마크다운
-재편집, 이미지 추가/삭제, 섹션 삭제, 섹션 제목 변경(= 사이드바 라벨
-변경). 하지만 **섹션을 새로 만드는 기능은 없다** —
-`editor/html_editor.py`에 섹션 생성 메서드가 없고 `editor/server.py`의
-API도 섹션별 조회/수정/삭제(`GET`/`POST`/`DELETE /api/sections/<id>`)만
-제공한다. 즉 import 직후의 단일 챕터를 `edit` 화면에서 "쪼개서" 여러
-사이드바 항목으로 만드는 것은 불가능하다 — 분할은 반드시 1번처럼
-마크다운 소스 단계에서 끝내고, `edit`는 분할·재빌드가 끝난 결과물의
-문구·이미지를 다듬는 용도로만 쓴다.
+**2. 마크다운 직접 편집 — 실제 파일을 쪼개고 싶을 때**
+
+`import`가 만든 `.md`를 열어 원래 장/절에 해당하는 헤딩 경계마다 잘라
+별도 파일로 저장한다(각 파일은 [마크다운 저작 규칙](#마크다운-저작-규칙)대로
+H1 하나로 시작 — 원래 H2를 H1로 올린다). `Part_I_.../Chapter_01_제목.md`
+명명 규칙을 따르면 순서가 자동 인식되고(2순위 규칙), 아니면
+`book.yaml`의 `order.files`로 직접 나열한다. 이미지 참조는 같은
+디렉토리에 있으면 그대로 유효하다. `check`로 확인한 뒤 `build html`로
+다시 빌드한다. git diff로 챕터별 변경을 추적하거나 파일 단위로 계속
+편집하고 싶다면 1번 대신 이 방법을 쓴다.
+
+**3. `edit` 웹 에디터 — 기존 챕터를 다듬는 용도, 새 챕터 생성은 불가**
+
+`edit`는 빌드된 HTML의 기존 섹션만 다룬다(마크다운 재편집, 이미지
+추가/삭제, 섹션 삭제·제목 변경). 섹션을 새로 만드는 기능은 없으므로
+(`editor/`에 생성 API 없음), 분할은 반드시 1번 또는 2번으로 빌드
+이전에 끝내고 `edit`는 결과물의 문구·이미지를 다듬는 용도로만 쓴다.
 
 ### 로컬 LLM 번역 — translate
 
@@ -677,7 +696,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 219개 테스트 (cli 13 + manifest 12 + html_book 12 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 71 + translation 38 + server 12)
+pytest tests/ -q      # 257개 테스트 (cli 14 + manifest 20 + chapter_split 9 + html_book 18 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 85 + translation 38 + server 12)
 ruff check src tests
 ```
 
@@ -710,11 +729,18 @@ ruff check src tests
   순수 함수·API·이미지 임베드 로직은 `test_pdf_book.py`/`test_server.py`/
   `test_editor.py`로 고정돼 있지만, 실제 브라우저로 렌더링하는
   `convert_one`은 수동 검증만 거쳤다.
-- **`import`는 챕터 자동 분리를 지원하지 않는다**: PDF 전체를 파일
-  하나로 추출한다(Part/Chapter 명명 규칙에 맞춘 자동 분할은 아직 없음).
-  텍스트 레이어가 없는 스캔 PDF도 지원하지 않는다 — OCR 기능은 없다.
-  복잡한 다단 표(예: 병합 셀이 있는 평가표)는 표로 인식되지 못하고
-  일반 문단으로 추출될 수 있다.
+- **`import`는 Part_/Chapter_ 명명 규칙에 맞춘 실제 파일 자동 분할을
+  지원하지 않는다**: PDF 전체를 파일 하나로 추출한다. 대신 폰트 크기
+  기반으로 챕터 제목 후보를 감지해 `## ` 마커 + `book.yaml`의 `split`
+  설정을 자동으로 붙이므로(휴리스틱, `--no-headings`로 끌 수 있음)
+  대부분의 경우 추가 조치 없이 사이드바가 챕터별로 나뉜다. 다만
+  휴리스틱이라 (1) 본문과 헤딩 폰트 크기가 거의 같은 문서에서는 아무것도
+  못 찾고, (2) 강조 인용문·표지 문구처럼 크고 짧은 텍스트를 헤딩으로
+  오인할 수 있다 — 감지 결과가 부정확하면 [import 결과물을 챕터별로
+  분리하기](#import-결과물을-챕터별로-분리하기--사이드바-챕터-링크-만들기)의
+  방법으로 직접 고친다. 텍스트 레이어가 없는 스캔 PDF도 지원하지 않는다
+  — OCR 기능은 없다. 복잡한 다단 표(예: 병합 셀이 있는 평가표)는 표로
+  인식되지 못하고 일반 문단으로 추출될 수 있다.
 - **`translate`는 로컬 Ollama 서버가 필수다**: 원격/클라우드 LLM API는
   지원하지 않는다 — 항상 `localhost`(또는 지정한 host)에서 실행 중인
   Ollama 서버와 미리 받아둔(`ollama pull`) 모델이 있어야 한다.
@@ -726,73 +752,59 @@ ruff check src tests
 
 ## 변경이력
 
+### 0.4.2 (2026-08-14) — 단일 파일 코퍼스도 챕터별 사이드바로
+
+- **feat**: `book.yaml`의 `split: {files, heading_level}` 설정 추가 —
+  물리적 분할 없이 빌드 시점 H2 경계로 섹션을 나눠 사이드바에 챕터별
+  링크 노출(`chapter_split.py` 신설), 펜스 코드·raw HTML·blockquote
+  코드펜스 내부 `## `는 경계에서 제외.
+- **feat**: `import`가 폰트 크기 기반으로 챕터 제목을 자동 감지해 `## `
+  마커 삽입 + `split` 설정 자동 기입(`--no-headings`로 끌 수 있음).
+- 회귀 테스트 38건 추가(총 257개).
+
 ### 0.4.1 (2026-08-13) — Breaking: `import pdf` → `import`
 
-- **breaking**: `import pdf <PDF_PATH> <OUT_DIR>` → `import <PDF_PATH>
-  <OUT_DIR>`로 평탄화(PDF 전용으로 스코프 확정). 기존 스크립트는
-  명령어를 고쳐야 한다.
-- **feat**: `import`에 `.pdf` 확장자 검증 추가 — 다른 포맷이면 즉시
-  안내 메시지로 실패.
-- **feat**: `translate`의 `k2e`(한→영) 방향에 청크 단위 잔여 한글
-  검증·자동 재시도 추가(최대 2회, 실패 시 경고 출력). 자세한 동작은
-  [k2e 번역 완전성 검증](#k2e-번역-완전성-검증--잔여-한글-자동-재시도)
-  참고 — 기존 번역 결과물엔 소급 적용되지 않는다.
+- **breaking**: `import pdf` → `import`로 평탄화(PDF 전용 스코프 확정),
+  `.pdf` 확장자 검증 추가.
+- **feat**: `translate` k2e 방향에 청크 단위 잔여 한글 검증·자동
+  재시도(최대 2회) 추가.
 - 회귀 테스트 24건 추가(총 219개).
 
 ### 0.4.0 (2026-08-13)
 
-- **feat**: `import pdf` 명령 추가 — pdfplumber로 컬럼/표/이미지 위치를
-  인식해 영문 PDF를 마크다운 코퍼스로 추출한다. 문서별 불릿 글리프·단어
-  간격 자동 보정, 쪽번호 제거, 이미지 추출(장식용/반복 로고 자동 제외)을
-  포함한다.
-- **feat**: `translate` 명령 추가 — 로컬 Ollama로 코퍼스를 번역한다(토큰
-  비용 없음). 코드/Mermaid/raw-HTML 블록은 보존하고, 챕터·청크 단위
-  진행 상황을 출력하며, `book.yaml`의 `translation:` 설정을 지원한다.
-  기본 모델은 `exaone3.5:7.8b`.
-- **fix**: `check`와 `translate`가 서로 다른 규칙으로 Ollama 모델명을
-  매칭해 사전 점검은 통과하고 실제 번역만 404로 실패하던 불일치 수정.
-- **fix**: 모든 명령어 도움말에서 한글이 실제로는 터미널 2칸을 차지하는데
-  1칸으로 계산되던 오류로 좁은 터미널에서 줄바꿈이 깨지던 문제 수정,
-  설명 전반을 핵심 위주로 축약. 각 명령어 인자(ARGS)에 대한 설명도 추가.
-- **fix**: `import pdf` 결과물에서 PDF 원문의 "#1)" 같은 순번 표기가
-  python-markdown에 의해 `<h1>`로 오인식되던 문제, 여러 불릿(●)이나
-  순번 표기가 한 물리적 줄에 뭉쳐 나오던 문제 수정.
-- **fix**: 웹 에디터(`edit`)가 Tailwind CSS·EasyMDE 등을 전부 CDN에서
-  불러오게 돼 있어 CDN이 막힌 환경(사내망/오프라인)에서 초기화 중 멈춰
-  화면이 비어 보이던 문제 수정 — HTML/PDF 빌더처럼 필요한 라이브러리를
-  전부 로컬에 번들해 완전 오프라인에서도 동작하게 했다.
+- **feat**: `import pdf` 명령 추가(pdfplumber 컬럼/표/이미지 인식, 불릿·
+  단어 간격 자동 보정, 쪽번호 제거, 이미지 추출), `translate` 명령
+  추가(로컬 Ollama, 코드/Mermaid/raw-HTML 보존, 기본 모델 `exaone3.5:7.8b`).
+- **fix**: `check`/`translate` Ollama 모델명 매칭 불일치, 한글 폭 계산
+  오류로 인한 도움말 줄바꿈 깨짐, `import pdf`의 "#1)" 순번 표기
+  `<h1>` 오인식·불릿 뭉침 문제 수정.
+- **fix**: 웹 에디터 CDN 의존 → 로컬 번들로 교체(오프라인 대응).
 - 회귀 테스트 111건 추가(총 195개).
 
 ### 0.3.7 (2026-08-05)
 
-- **fix**: `**[출처](url)**`처럼 굵은 글씨 안에 링크가 중첩되면 `a`의 명시적
-  색상이 `strong`의 상속색을 이겨 같은 "강조" 표시인데 색만 갈라져 보이던
-  문제 수정 — 굵은 글씨 안 링크는 항상 `strong`의 색을 따르도록 통일.
+- **fix**: 굵은 글씨 안 링크 색상이 `strong` 상속색과 어긋나던 문제
+  수정 — 항상 `strong` 색을 따르도록 통일.
 
 ### 0.3.6 (2026-08-05)
 
-- **feat**: 챕터 간 상대경로 `.md` 링크(`[§5](../Part_I/Chapter_05_*.md)`)를
-  빌드 시점에 같은 HTML 안의 `#앵커`로 자동 재작성 — 이전에는 존재하지 않는
-  로컬 파일을 가리키는 죽은 링크로 남았다. book.yaml이 제외한 파일이나 외부
-  URL은 원본 href를 그대로 둔다. macOS(NFD) 파일명과 마크다운 본문(NFC)의
-  정규화 불일치도 고려해 매칭한다.
+- **feat**: 챕터 간 상대경로 `.md` 링크를 빌드 시점에 `#앵커`로 자동
+  재작성(죽은 링크 방지), 제외 파일·외부 URL은 원본 유지, NFC/NFD
+  파일명 정규화 불일치도 매칭.
 - 회귀 테스트 4건 추가(총 84개).
 
 ### 0.3.5 (2026-08-02)
 
-- **fix**: `playwright` 의존성에 버전 상한 추가(`>=1.62,<1.63`). 상한이 없으면
-  pip/pipx가 재설치·업그레이드 때마다 최신 playwright를 골라버리는데, 이때
-  요구하는 Chromium 빌드 리비전이 이미 받아둔 것과 어긋나 `check`에서
-  "미설치"로 오탐되는 문제가 있었다(특히 pipx는 앱마다 별도 격리 venv를
-  써서 더 자주 겪는다).
+- **fix**: `playwright` 의존성에 버전 상한(`>=1.62,<1.63`) 추가 — 상한
+  없으면 재설치 시 Chromium 리비전 불일치로 `check`가 미설치로 오탐하던
+  문제 수정.
 
 ### 0.3.4 (2026-08-02)
 
-- **feat**: `check` 명령이 PDF 빌드(Playwright)·PDF 병합(pypdf)·웹
-  에디터(Flask/Pillow) 등 선택 기능 설치 상태도 점검해 설치 명령을
-  미리 안내한다.
-- **fix**: 여러 줄짜리 예외 메시지가 경고 문장 중간에 끼어들어 줄바꿈이
-  깨지던 문제 수정(Mermaid 사전 렌더링/`book.yaml` 파싱/PDF 변환 실패 시).
+- **feat**: `check`가 PDF 빌드·병합·웹 에디터 등 선택 기능 설치 상태도
+  점검해 설치 명령 안내.
+- **fix**: 여러 줄짜리 예외 메시지가 경고 문장에 끼어들어 줄바꿈 깨지던
+  문제 수정.
 - 회귀 테스트 10건 추가(총 80개).
 
 ### 0.3.3 (2026-08-02)

@@ -162,7 +162,7 @@ def test_import_rejects_non_pdf_extension(tmp_path: Path):
 def test_import_extension_check_is_case_insensitive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
-    def fake_import_pdf(pdf_path, out_dir, *, title, extract_images):
+    def fake_import_pdf(pdf_path, out_dir, *, title, extract_images, detect_chapter_headings):
         captured.update(pdf_path=pdf_path, out_dir=out_dir, title=title, extract_images=extract_images)
         return out_dir / "book.md"
 
@@ -178,8 +178,8 @@ def test_import_extension_check_is_case_insensitive(tmp_path: Path, monkeypatch:
 def test_import_passes_title_and_no_images(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
-    def fake_import_pdf(pdf_path, out_dir, *, title, extract_images):
-        captured.update(title=title, extract_images=extract_images)
+    def fake_import_pdf(pdf_path, out_dir, *, title, extract_images, detect_chapter_headings):
+        captured.update(title=title, extract_images=extract_images, detect_chapter_headings=detect_chapter_headings)
         return out_dir / f"{title}.md"
 
     monkeypatch.setattr("mdbook_binder.pdf_import.import_pdf", fake_import_pdf)
@@ -193,6 +193,25 @@ def test_import_passes_title_and_no_images(tmp_path: Path, monkeypatch: pytest.M
     assert result.exit_code == 0, result.output
     assert captured["title"] == "My Book"
     assert captured["extract_images"] is False
+    assert captured["detect_chapter_headings"] is True
+
+
+def test_import_no_headings_flag_disables_heading_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    def fake_import_pdf(pdf_path, out_dir, *, title, extract_images, detect_chapter_headings):
+        captured.update(detect_chapter_headings=detect_chapter_headings)
+        return out_dir / "book.md"
+
+    monkeypatch.setattr("mdbook_binder.pdf_import.import_pdf", fake_import_pdf)
+    fake_pdf = _write(tmp_path, "book.pdf", "")
+
+    result = CliRunner().invoke(
+        main, ["import", str(fake_pdf), str(tmp_path / "out"), "--no-headings"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["detect_chapter_headings"] is False
 
 
 # ── translate ──────────────────────────────────────────────────────────

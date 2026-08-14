@@ -26,18 +26,31 @@ pdfplumber로 단어별 (x, y) 좌표를 직접 얻어 두 가지를 처리한�
   이름으로 대응시켜 이미지를 파일로 저장하고, 위치에 맞춰 본문 흐름에
   마크다운 이미지 참조로 끼워 넣는다. 장식용 스페이서(너무 작은 이미지)와
   여러 페이지에 반복되는 로고/아이콘은 제외한다.
+- 챕터 제목 후보 감지(휴리스틱): 문서 앞부분 표본에서 본문 폰트 크기의
+  최빈값을 구하고, 그보다 눈에 띄게 큰(기본 1.15배 이상) 폰트로 된 짧은
+  단독 줄을 챕터/절 제목으로 추정해 `## ` 마커를 붙인다. 폰트 크기 신호가
+  아예 없는 문서(표본 부족)나 본문과 헤딩 폰트 크기가 거의 같은 문서에서는
+  아무것도 감지하지 않고 조용히 넘어간다 — 다른 휴리스틱들과 마찬가지로
+  "확신 없으면 건드리지 않는다"는 원칙을 따른다. 하나라도 감지되면
+  `book.yaml`에 `split: {files: [<파일명>], heading_level: 2}`를 자동으로
+  써서, `manifest.resolve_split_targets()`/`html_book.build_html()`이
+  빌드 시점에 그 경계로 사이드바 섹션을 나누게 한다(사람이 손으로
+  `book.yaml`을 편집하지 않아도 `check`/`build html`만으로 챕터별 사이드바가
+  생긴다). `--no-headings`로 끌 수 있다.
 
-챕터 분리(Part_/Chapter_ 명명 규칙에 맞춘 자동 분할)는 Phase 2 스코프다 —
-PDF 전체를 파일 하나로 뽑아낸다. 그래도 manifest.py의 3순위 자연정렬
-폴백이 단일 파일 코퍼스를 그대로 받아들이므로, 이 모듈의 산출물은
-manifest.py를 전혀 건드리지 않고도 그 자체로 유효한 mdbook-binder 코퍼스다
-(`build html`/`build pdf`/`translate` 모두 바로 이어받을 수 있다).
+챕터 분리는 여전히 파일 하나 안에서(위 감지된 `## ` 경계 + `split` 설정으로)
+이뤄진다 — Part_/Chapter_ 명명 규칙에 맞춘 실제 파일 자동 분할은 아직
+없다. manifest.py의 3순위 자연정렬 폴백이 단일 파일 코퍼스를 그대로
+받아들이므로, 이 모듈의 산출물은 manifest.py를 전혀 건드리지 않고도 그
+자체로 유효한 mdbook-binder 코퍼스다(`build html`/`build pdf`/`translate`
+모두 바로 이어받을 수 있다).
 """
 
 from __future__ import annotations
 
 import hashlib
 import re
+from collections import Counter
 from pathlib import Path
 
 from mdbook_binder.manifest import write_minimal_book_yaml
@@ -111,6 +124,25 @@ _MIN_IMAGE_DIMENSION = 20.0
 # 쪽번호로 볼 페이지 상/하단 여백 비율 — 표준적인 책 레이아웃의 위/아래
 # 여백 비중과 비슷한 값이다.
 _PAGE_NUMBER_MARGIN_FRAC = 0.1
+# _mark_heading_words()가 감지된 챕터 제목 줄 앞에 붙이는 마커 — 리터럴
+# "##"을 쓰면 원문 PDF 텍스트에 우연히 등장하는 "##"(예: 해시태그, 코드
+# 스니펫 인용)까지 진짜 헤딩과 구분할 수 없어진다(escape 대상인지 판단할
+# 방법이 없음). 실제 추출 텍스트에는 절대 등장하지 않는 제어문자 조합을
+# 써서, clean_paragraphs()가 "우리가 직접 붙인 마커"와 "원문에 우연히
+# 있던 #"을 확실히 구분하게 한다 — filter_garbled_words()가 이미 앞
+# 단계에서 원문 단어의 제어문자를 걸러내므로 이 시퀀스가 원문과 충돌할
+# 일은 없다.
+_HEADING_SENTINEL = "\x01HEADING\x01"
+_HEADING_LINE_RE = re.compile(rf"^{re.escape(_HEADING_SENTINEL)}\s+\S", re.MULTILINE)
+# clean_paragraphs()가 _HEADING_SENTINEL을 실제 "## " 마크다운으로 바꾼
+# 뒤, import_pdf()가 "헤딩이 하나라도 감지됐는가"를 최종 결과물에서
+# 확인할 때 쓴다(그 시점엔 센티널이 이미 사라지고 진짜 "## "만 남는다).
+_MD_H2_RE = re.compile(r"^##\s+\S", re.MULTILINE)
+# calibrate_body_font_size()가 표본으로 쓰는 문자 크기 표본 최소 개수 —
+# 이보다 적으면(표본 부족) 최빈값이 우연에 좌우되기 쉬워 헤딩 감지 자체를
+# 건너뛴다(휴리스틱 비활성화가 오탐보다 안전하다는 원칙, calibrate_word_x_tolerance()와
+# 동일한 태도).
+_MIN_FONT_SIZE_SAMPLES = 20
 
 
 def _detect_document_bullet_chars(raw_text: str, *, min_occurrences: int = 5) -> set[str]:
@@ -352,7 +384,67 @@ def _process_columns(words: list[dict]) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
-def _process_page(words: list[dict]) -> str:
+def detect_heading_rows(
+    rows: list[list[dict]],
+    body_size: float,
+    *,
+    min_ratio: float = 1.15,
+    max_words: int = 15,
+    max_size_spread: float = 0.5,
+) -> set[int]:
+    """본문 폰트보다 눈에 띄게 큰(min_ratio 이상) 짧은 단독 줄을 챕터 제목
+    후보로 본다(순수 함수).
+
+    - 줄 안의 폰트 크기 편차가 max_size_spread를 넘으면(예: 본문 문장에
+      큰 글자 하나가 섞인 경우 — 첫 글자 장식체 등) 제외한다. 헤딩은
+      보통 줄 전체가 같은 크기이므로, 편차가 크면 헤딩이 아니라 본문
+      문장에 우연히 큰 글자가 섞인 경우로 본다.
+    - max_words를 넘는 긴 줄은 제외한다 — 진짜 헤딩은 짧고, 본문 문단이
+      우연히 본문보다 살짝 큰 폰트로 통째로 조판된 경우(강조 인용문 등)와
+      구분하기 위함이다.
+    - `size` 키가 없는 단어(예: _save_images_and_build_elements()가 만든
+      이미지 참조 요소)만 있는 줄은 판단 근거가 없으므로 후보에서 제외한다.
+    """
+    result: set[int] = set()
+    for i, row in enumerate(rows):
+        if not row or len(row) > max_words:
+            continue
+        sizes = [w["size"] for w in row if "size" in w]
+        if not sizes:
+            continue
+        if max(sizes) - min(sizes) > max_size_spread:
+            continue
+        if (sum(sizes) / len(sizes)) >= body_size * min_ratio:
+            result.add(i)
+    return result
+
+
+def _mark_heading_words(words: list[dict], rows: list[list[dict]], heading_indices: set[int]) -> list[dict]:
+    """감지된 헤딩 후보 줄마다 "##" 마커 요소를 그 줄 맨 앞에 끼워 넣는다.
+
+    _save_images_and_build_elements()가 이미지를 "단어처럼 생긴" 요소로
+    본문 흐름에 끼워 넣는 것과 같은 방식 — 좌표(x0/x1/top/bottom)만 실제
+    단어와 같은 계로 맞추면, 이후 컬럼/행 재구성 파이프라인이 이 마커를
+    일반 단어처럼 다뤄 줄 맨 앞(가장 작은 x0)에 자연히 배치한다. 그 줄이
+    "_rows_to_text()"를 거치면 "## 실제 제목 텍스트"가 된다.
+    """
+    if not heading_indices:
+        return words
+
+    markers: list[dict] = []
+    for i in heading_indices:
+        row = rows[i]
+        if not row:
+            continue
+        first = row[0]
+        markers.append({
+            "text": _HEADING_SENTINEL, "x0": first["x0"] - 1.0, "x1": first["x0"] - 0.5,
+            "top": first["top"], "bottom": first["bottom"],
+        })
+    return words + markers
+
+
+def _process_page(words: list[dict], body_size: float | None = None) -> str:
     """한 페이지의 단어들을 표 인식 + 컬럼 인식(읽기 순서 보정)을 거쳐 텍스트로 만든다.
 
     표 인식을 컬럼 분리보다 먼저, 페이지 전체 단어를 대상으로 수행한다 —
@@ -361,11 +453,22 @@ def _process_page(words: list[dict]) -> str:
     검증된 회귀). 표 영역을 찾으면 그 앞/뒤 나머지만 컬럼 인식으로 넘긴다 —
     표 영역이 우연히 2단 레이아웃처럼 보이는 것까지 막을 필요는 없다
     (detect_table()의 min_cols=3 기본값이 2단 텍스트와의 오탐을 이미 막는다).
+
+    body_size가 주어지면(문서 전체에서 calibrate_body_font_size()로 구한
+    본문 폰트 크기) detect_heading_rows()로 챕터 제목 후보를 찾아 "## "
+    마커를 붙인다 — 표 인식보다 먼저 해야 한다(마커 삽입으로 word 목록이
+    바뀌면 rows를 다시 구해야 표/컬럼 인식이 최신 상태를 본다).
     """
     if not words:
         return ""
 
     rows = _group_into_rows(words)
+    if body_size is not None:
+        heading_indices = detect_heading_rows(rows, body_size)
+        if heading_indices:
+            words = _mark_heading_words(words, rows, heading_indices)
+            rows = _group_into_rows(words)
+
     table_region = detect_table(rows)
     if not table_region:
         return _process_columns(words)
@@ -432,6 +535,41 @@ def _sample_char_gaps(pdf, *, max_pages: int = 10) -> list[float]:
                 if 0 <= gap < 20:
                     gaps.append(gap)
     return gaps
+
+
+def _sample_font_sizes(pdf, *, max_pages: int = 10) -> list[float]:
+    """문서 앞부분 max_pages 페이지에서 문자별 폰트 크기를 표본 수집한다.
+
+    _sample_char_gaps()와 같은 이유로 앞부분만 본다 — 본문 폰트 크기는
+    문서 전체에서 대체로 일관되므로 표본으로 충분하고, 매번 문서 전체를
+    훑는 비용을 피한다. 공백 문자는 크기가 0이거나 신뢰할 수 없는 경우가
+    있어 표본에서 제외한다.
+    """
+    sizes: list[float] = []
+    for page in pdf.pages[:max_pages]:
+        for ch in page.chars:
+            if ch.get("text", "").strip():
+                sizes.append(ch["size"])
+    return sizes
+
+
+def calibrate_body_font_size(sizes: list[float], *, min_samples: int = _MIN_FONT_SIZE_SAMPLES) -> float | None:
+    """문자 크기 표본에서 본문 폰트 크기(최빈값)를 추론한다(순수 함수).
+
+    책 한 권 전체에서 가장 많은 글자 수를 차지하는 크기는 거의 항상 본문
+    텍스트다(헤딩·캡션 등은 상대적으로 드물다) — 그래서 평균이 아니라
+    최빈값을 쓴다(평균은 헤딩이 유난히 크면 한쪽으로 쏠릴 수 있다). 0.5pt
+    단위로 반올림해 묶는다 — 폰트 렌더링/부동소수 오차로 미세하게 다른
+    크기가 같은 본문 폰트인데도 서로 다른 값으로 흩어지는 것을 막는다.
+
+    표본이 min_samples 미만이면(문서가 너무 짧거나 폰트 크기 정보가 없는
+    경우) None을 반환해 헤딩 감지 자체를 건너뛰게 한다 — calibrate_word_x_tolerance()와
+    같은 태도로, 확신 없는 추론보다 휴리스틱 비활성화가 안전하다.
+    """
+    if len(sizes) < min_samples:
+        return None
+    rounded = [round(s * 2) / 2 for s in sizes]
+    return Counter(rounded).most_common(1)[0][0]
 
 
 def calibrate_word_x_tolerance(gaps: list[float], *, default: float = _DEFAULT_X_TOLERANCE) -> float:
@@ -561,7 +699,9 @@ def _save_images_and_build_elements(pages_images: list[list[dict]], images_dir: 
     return result
 
 
-def extract_pdf_text(pdf_path: Path, *, images_dir: Path | None = None) -> list[str]:
+def extract_pdf_text(
+    pdf_path: Path, *, images_dir: Path | None = None, detect_headings: bool = True
+) -> list[str]:
     """pdfplumber로 페이지별 단어를 추출해 컬럼/표를 인식한 텍스트로 변환한다(페이지 1개당 문자열 1개).
 
     pypdf의 layout 모드는 슬라이드/프레젠테이션류 PDF의 줄바꿈은 잘 복원하지만
@@ -573,11 +713,17 @@ def extract_pdf_text(pdf_path: Path, *, images_dir: Path | None = None) -> list[
     images_dir가 주어지면 이미지도 추출해 그 아래(images/ 하위 아님 —
     images_dir 자체가 images/ 폴더)에 저장하고, 위치에 맞춰 본문 흐름에
     마크다운 이미지 참조로 끼워 넣는다. None이면(기본값) 텍스트만 뽑는다.
+
+    detect_headings=True(기본)면 문서 앞부분 표본으로 본문 폰트 크기를
+    추정해(calibrate_body_font_size()) 그보다 눈에 띄게 큰 짧은 줄을
+    챕터 제목 후보로 보고 "## " 마커를 붙인다(detect_heading_rows() 참고).
+    표본 부족 등으로 본문 크기를 못 정하면 전체가 조용히 건너뛴다.
     """
     import pdfplumber
 
     with pdfplumber.open(str(pdf_path)) as pdf:
         x_tolerance = calibrate_word_x_tolerance(_sample_char_gaps(pdf))
+        body_size = calibrate_body_font_size(_sample_font_sizes(pdf)) if detect_headings else None
 
         image_elements_per_page: list[list[dict]] = [[] for _ in pdf.pages]
         if images_dir is not None:
@@ -586,11 +732,11 @@ def extract_pdf_text(pdf_path: Path, *, images_dir: Path | None = None) -> list[
 
         pages = []
         for page, img_elements in zip(pdf.pages, image_elements_per_page):
-            words = page.extract_words(x_tolerance=x_tolerance)
+            words = page.extract_words(x_tolerance=x_tolerance, extra_attrs=["size"])
             words = filter_garbled_words(words)
             words = filter_page_number_words(words, page.height)
             words = words + img_elements
-            pages.append(_process_page(words))
+            pages.append(_process_page(words, body_size))
         return pages
 
 
@@ -667,13 +813,25 @@ def clean_paragraphs(raw_text: str) -> str:
         # "\#1)"이 돼 _STEP_MARKER_RE("^#\d")에 더 이상 매치되지 않는다.
         is_step_marker = _STEP_MARKER_RE.match(line) is not None
 
-        # 원문이 "#1) Load the model"처럼 "#"을 순번 표기로 쓰는 경우가
-        # 흔한데, python-markdown은 "#" 뒤에 공백이 없어도 ATX 헤딩으로
-        # 인식해(예: "#1) ..." → <h1>) 챕터당 H1 하나 규칙이 깨지고 본문
-        # 곳곳이 큰 제목으로 렌더된다(실사용 PDF로 재현됨). 이 함수는 절대
-        # "#"으로 시작하는 줄을 스스로 만들지 않으므로(제목 줄은
-        # import_pdf()가 별도로 붙인다), 원문에서 온 줄 맨 앞 "#"은 전부
-        # 이스케이프해도 안전하다.
+        # _mark_heading_words()가 감지된 챕터 제목 줄 앞에 붙인 센티널
+        # 마커도 escape보다 먼저 판정한다 — 하드랩 해제·이스케이프 없이
+        # 독립된 헤딩 단락으로 그대로 통과시키되, 사람이 읽는 마크다운에는
+        # 센티널이 아니라 실제 "## "를 남긴다.
+        if _HEADING_LINE_RE.match(line):
+            flush_prose()
+            flush_block()
+            heading_text = line[len(_HEADING_SENTINEL):].strip()
+            paragraphs.append(f"## {heading_text}")
+            continue
+
+        # 원문이 "#1) Load the model"처럼 "#"을 순번 표기로 쓰거나, 그냥
+        # "##"이 우연히 등장하는 경우(해시태그·코드 인용 등)가 흔한데,
+        # python-markdown은 "#" 뒤에 공백이 없어도 ATX 헤딩으로 인식해
+        # (예: "#1) ..." → <h1>) 챕터당 H1 하나 규칙이 깨지고 본문 곳곳이
+        # 큰 제목으로 렌더된다(실사용 PDF로 재현됨). 위에서 이미 센티널
+        # 마커(우리가 직접 붙인 진짜 헤딩)는 걸러냈으므로, 여기 남은 "#"로
+        # 시작하는 줄은 전부 원문에서 그대로 온 것이라 이스케이프해도
+        # 안전하다.
         if line.startswith("#"):
             line = "\\" + line
 
@@ -700,17 +858,38 @@ def clean_paragraphs(raw_text: str) -> str:
     return "\n\n".join(paragraphs)
 
 
-def import_pdf(pdf_path: Path, out_dir: Path, *, title: str | None = None, extract_images: bool = True) -> Path:
+def import_pdf(
+    pdf_path: Path,
+    out_dir: Path,
+    *,
+    title: str | None = None,
+    extract_images: bool = True,
+    detect_chapter_headings: bool = True,
+) -> Path:
     """PDF_PATH를 단일 평면 마크다운 + 최소 book.yaml(language: en)로 out_dir에 쓴다.
 
     extract_images=True(기본)면 out_dir/images/에 이미지를 저장하고 본문
     흐름에 위치에 맞춰 끼워 넣는다 — html_book.py의 base64 이미지 임베드가
     상대경로 `images/...` 참조를 그대로 읽으므로, 이 코퍼스를 build html로
-    바로 이어붙여도 이미지가 그대로 살아있다. 챕터 분리는 Phase 2 스코프다.
-    반환값은 생성된 .md 파일 경로.
+    바로 이어붙여도 이미지가 그대로 살아있다.
+
+    detect_chapter_headings=True(기본)면 폰트 크기 기반으로 챕터 제목
+    후보를 찾아 "## " 마커를 붙인다(extract_pdf_text() 참고). 하나라도
+    감지되면 book.yaml에 `split: {files: [<파일명>], heading_level: 2}`도
+    함께 써서, 곧바로 `build html`만 돌려도 챕터별 사이드바 섹션이 생기게
+    한다(manifest.resolve_split_targets()/html_book.build_html() 소비) —
+    감지된 게 없으면(표본 부족·본문과 헤딩 폰트 크기가 거의 같은 문서 등)
+    기존과 동일하게 language만 있는 book.yaml을 쓴다. 감지된 경계가
+    부정확하면 .md 파일의 "## " 마커를 손으로 고친 뒤 다시 빌드하면 된다
+    (파일을 물리적으로 쪼갤 필요 없음).
+
+    Part_/Chapter_ 명명 규칙에 맞춘 실제 파일 자동 분할은 여전히 스코프
+    밖이다. 반환값은 생성된 .md 파일 경로.
     """
     images_dir = out_dir / "images" if extract_images else None
-    pages = strip_repeated_lines(extract_pdf_text(pdf_path, images_dir=images_dir))
+    pages = strip_repeated_lines(
+        extract_pdf_text(pdf_path, images_dir=images_dir, detect_headings=detect_chapter_headings)
+    )
     body = clean_paragraphs("\n\n".join(pages))
 
     stem = title or pdf_path.stem
@@ -718,5 +897,12 @@ def import_pdf(pdf_path: Path, out_dir: Path, *, title: str | None = None, extra
     md_path = out_dir / f"{stem}.md"
     md_path.write_text(f"# {stem}\n\n{body}\n", encoding="utf-8")
 
-    write_minimal_book_yaml(out_dir / "book.yaml", language="en")
+    if _MD_H2_RE.search(body):
+        write_minimal_book_yaml(
+            out_dir / "book.yaml",
+            language="en",
+            split={"files": [md_path.name], "heading_level": 2},
+        )
+    else:
+        write_minimal_book_yaml(out_dir / "book.yaml", language="en")
     return md_path

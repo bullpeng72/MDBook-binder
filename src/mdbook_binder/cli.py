@@ -266,7 +266,13 @@ def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool
 @click.argument("out_dir", type=click.Path(path_type=Path))
 @click.option("--title", "title_override", default=None, help="제목/파일명 오버라이드 (기본: PDF 파일명)")
 @click.option("--no-images", "no_images", is_flag=True, default=False, help="이미지 추출 없이 텍스트만 뽑는다")
-def import_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool) -> None:
+@click.option(
+    "--no-headings", "no_headings", is_flag=True, default=False,
+    help="폰트 크기 기반 챕터 제목(## 마커) 자동 감지를 끈다",
+)
+def import_cmd(
+    pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool, no_headings: bool
+) -> None:
     """PDF를 마크다운 코퍼스로 추출한다(지원 포맷은 PDF뿐 — docx 등은 PDF로 변환 후 사용).
 
     \b
@@ -275,12 +281,17 @@ def import_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_ima
       OUT_DIR   마크다운 코퍼스를 생성할 디렉토리
 
     \b
-    전체를 단일 파일로 추출한다(챕터 자동 분리는 아직 지원 안 함).
-    이미지는 기본적으로 OUT_DIR/images/에 저장되고 본문 흐름의
-    원래 위치에 삽입된다(--no-images로 끌 수 있음) — 너무 작은
-    장식용 이미지와 반복되는 로고/아이콘은 자동으로 제외한다.
-    결과는 그 자체로 build html/pdf나 translate가 바로 받는
-    유효한 코퍼스다.
+    전체를 단일 파일로 추출한다(Part_/Chapter_ 명명 규칙에 맞춘 실제
+    파일 자동 분할은 아직 지원 안 함). 대신 본문 폰트보다 눈에 띄게 큰
+    짧은 줄을 챕터 제목 후보로 감지해 "## " 마커를 붙이고, 하나라도
+    감지되면 book.yaml에 split 설정까지 자동으로 써서 build html만
+    다시 돌려도 챕터별 사이드바가 생기게 한다(--no-headings로 끌 수
+    있음 — 휴리스틱이라 문서에 따라 안 맞을 수 있고, 그럴 땐 .md의
+    "## " 마커를 손으로 고친 뒤 다시 빌드하면 된다). 이미지는 기본적으로
+    OUT_DIR/images/에 저장되고 본문 흐름의 원래 위치에 삽입된다
+    (--no-images로 끌 수 있음) — 너무 작은 장식용 이미지와 반복되는
+    로고/아이콘은 자동으로 제외한다. 결과는 그 자체로 build html/pdf나
+    translate가 바로 받는 유효한 코퍼스다.
     """
     if pdf_path.suffix.lower() != ".pdf":
         raise click.ClickException(f"PDF 파일만 지원합니다 (받은 파일: {pdf_path.name}) — docx 등은 PDF로 변환 후 다시 시도하세요")
@@ -288,7 +299,13 @@ def import_cmd(pdf_path: Path, out_dir: Path, title_override: str | None, no_ima
     from mdbook_binder.pdf_import import import_pdf
 
     print(f"\U0001f4c4 Extracting {pdf_path} ...")
-    md_path = import_pdf(pdf_path, out_dir, title=title_override, extract_images=not no_images)
+    md_path = import_pdf(
+        pdf_path,
+        out_dir,
+        title=title_override,
+        extract_images=not no_images,
+        detect_chapter_headings=not no_headings,
+    )
     print(f"✅ {md_path}")
 
 

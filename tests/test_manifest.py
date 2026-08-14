@@ -8,8 +8,10 @@ import yaml
 from mdbook_binder.manifest import (
     BookConfig,
     OrderConfig,
+    SplitConfig,
     TranslationConfig,
     resolve,
+    resolve_split_targets,
     write_minimal_book_yaml,
 )
 
@@ -153,6 +155,66 @@ class TestTranslationConfig:
         assert config.translation.host == TranslationConfig().host
         assert config.translation.timeout == TranslationConfig().timeout
         assert config.translation.chunk_chars == TranslationConfig().chunk_chars
+
+
+class TestSplitConfig:
+    def test_defaults_to_none_when_absent(self, tmp_path: Path):
+        _write(tmp_path, "book.yaml", "title: 예시\n")
+
+        config = BookConfig.load(tmp_path)
+
+        assert config.split is None
+
+    def test_parses_files_and_heading_level(self, tmp_path: Path):
+        _write(
+            tmp_path,
+            "book.yaml",
+            "split:\n  files: [My_Book.md]\n  heading_level: 3\n",
+        )
+
+        config = BookConfig.load(tmp_path)
+
+        assert config.split == SplitConfig(files=["My_Book.md"], heading_level=3)
+
+    def test_heading_level_defaults_to_2_when_omitted(self, tmp_path: Path):
+        _write(tmp_path, "book.yaml", "split:\n  files: [My_Book.md]\n")
+
+        config = BookConfig.load(tmp_path)
+
+        assert config.split.heading_level == 2
+
+
+class TestResolveSplitTargets:
+    def test_no_config_returns_empty_set(self, tmp_path: Path):
+        assert resolve_split_targets(tmp_path, None) == set()
+
+    def test_no_split_section_returns_empty_set(self, tmp_path: Path):
+        config = BookConfig()
+        assert resolve_split_targets(tmp_path, config) == set()
+
+    def test_literal_filename_resolved(self, tmp_path: Path):
+        target = _write(tmp_path, "My_Book.md")
+        _write(tmp_path, "other.md")
+        config = BookConfig(split=SplitConfig(files=["My_Book.md"]))
+
+        result = resolve_split_targets(tmp_path, config)
+
+        assert result == {target.resolve()}
+
+    def test_glob_pattern_matches_multiple_files(self, tmp_path: Path):
+        a = _write(tmp_path, "corpus_a.md")
+        b = _write(tmp_path, "corpus_b.md")
+        _write(tmp_path, "notes.md")
+        config = BookConfig(split=SplitConfig(files=["corpus_*.md"]))
+
+        result = resolve_split_targets(tmp_path, config)
+
+        assert result == {a.resolve(), b.resolve()}
+
+    def test_missing_file_silently_excluded(self, tmp_path: Path):
+        config = BookConfig(split=SplitConfig(files=["nope.md"]))
+
+        assert resolve_split_targets(tmp_path, config) == set()
 
 
 class TestWriteMinimalBookYaml:
