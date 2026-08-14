@@ -145,7 +145,9 @@ def test_update_section_stages_change_without_touching_disk(tmp_path: Path):
     client = create_app(str(html_path)).test_client()
     sec_id = client.get("/api/lecture").get_json()["sections"][0]["id"]
 
-    resp = client.post(f"/api/sections/{sec_id}", json={"markdown": "수정된 본문", "title": "새 제목"})
+    resp = client.post(
+        f"/api/sections/{sec_id}", json={"markdown": "수정된 본문", "title": "새 제목"}
+    )
     assert resp.status_code == 200
     assert resp.get_json()["success"] is True
     assert html_path.read_bytes() == original_bytes
@@ -180,7 +182,9 @@ def test_save_applies_update_and_delete_to_output_html(tmp_path: Path):
     meta = client.get("/api/lecture").get_json()
     keep_id, drop_id = meta["sections"][0]["id"], meta["sections"][1]["id"]
 
-    client.post(f"/api/sections/{keep_id}", json={"markdown": "새로운 본문 내용", "title": "챕터 1"})
+    client.post(
+        f"/api/sections/{keep_id}", json={"markdown": "새로운 본문 내용", "title": "챕터 1"}
+    )
     client.delete(f"/api/sections/{drop_id}")
 
     resp = client.post("/api/save")
@@ -205,7 +209,9 @@ def test_pending_image_add_list_and_remove_roundtrip(tmp_path: Path):
     client = create_app(str(html_path)).test_client()
     sec_id = client.get("/api/lecture").get_json()["sections"][0]["id"]
 
-    add = client.post(f"/api/sections/{sec_id}/images", json={"path": str(new_img), "caption": "캡션"})
+    add = client.post(
+        f"/api/sections/{sec_id}/images", json={"path": str(new_img), "caption": "캡션"}
+    )
     assert add.status_code == 200
     assert add.get_json()["success"] is True
 
@@ -225,9 +231,7 @@ def test_add_pending_image_rejects_missing_file(tmp_path: Path):
     client = create_app(str(html_path)).test_client()
     sec_id = client.get("/api/lecture").get_json()["sections"][0]["id"]
 
-    resp = client.post(
-        f"/api/sections/{sec_id}/images", json={"path": str(tmp_path / "nope.png")}
-    )
+    resp = client.post(f"/api/sections/{sec_id}/images", json={"path": str(tmp_path / "nope.png")})
 
     assert resp.status_code == 400
 

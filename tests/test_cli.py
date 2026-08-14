@@ -52,7 +52,9 @@ def test_check_rejects_missing_root():
 def test_build_html_passes_cli_options_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
-    def fake_build_html(root, config, *, out_path, title_override, language_override, color_override):
+    def fake_build_html(
+        root, config, *, out_path, title_override, language_override, color_override
+    ):
         captured.update(
             root=root,
             out_path=out_path,
@@ -67,9 +69,17 @@ def test_build_html_passes_cli_options_through(tmp_path: Path, monkeypatch: pyte
     result = CliRunner().invoke(
         main,
         [
-            "build", "html", str(tmp_path),
-            "--out", str(tmp_path / "out.html"),
-            "--title", "제목", "--language", "en", "--color", "teal",
+            "build",
+            "html",
+            str(tmp_path),
+            "--out",
+            str(tmp_path / "out.html"),
+            "--title",
+            "제목",
+            "--language",
+            "en",
+            "--color",
+            "teal",
         ],
     )
 
@@ -95,7 +105,9 @@ def test_build_pdf_passes_merge_and_out_dir(tmp_path: Path, monkeypatch: pytest.
     captured = {}
 
     def fake_build_pdf(root, *, merge_name, out_dir, color_override):
-        captured.update(root=root, merge_name=merge_name, out_dir=out_dir, color_override=color_override)
+        captured.update(
+            root=root, merge_name=merge_name, out_dir=out_dir, color_override=color_override
+        )
 
     monkeypatch.setattr("mdbook_binder.pdf_book.build_pdf", fake_build_pdf)
     _write(tmp_path, "chapter.md", "# 챕터\n")
@@ -110,7 +122,9 @@ def test_build_pdf_passes_merge_and_out_dir(tmp_path: Path, monkeypatch: pytest.
     assert captured["out_dir"] == tmp_path / "dist"
 
 
-def test_build_pdf_wraps_runtime_error_as_click_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_build_pdf_wraps_runtime_error_as_click_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     def fake_build_pdf(root, *, merge_name, out_dir, color_override):
         raise RuntimeError("Playwright Chromium 없음")
 
@@ -130,14 +144,24 @@ def test_edit_passes_options_to_run_editor(tmp_path: Path, monkeypatch: pytest.M
     captured = {}
 
     def fake_run_editor(html_path, *, output_path, port, open_browser):
-        captured.update(html_path=html_path, output_path=output_path, port=port, open_browser=open_browser)
+        captured.update(
+            html_path=html_path, output_path=output_path, port=port, open_browser=open_browser
+        )
 
     monkeypatch.setattr("mdbook_binder.editor.server.run_editor", fake_run_editor)
     html_file = _write(tmp_path, "book.html", "<html></html>")
 
     result = CliRunner().invoke(
         main,
-        ["edit", str(html_file), "--port", "9999", "--out", str(tmp_path / "final.html"), "--no-browser"],
+        [
+            "edit",
+            str(html_file),
+            "--port",
+            "9999",
+            "--out",
+            str(tmp_path / "final.html"),
+            "--no-browser",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -159,11 +183,15 @@ def test_import_rejects_non_pdf_extension(tmp_path: Path):
     assert "book.docx" in result.output
 
 
-def test_import_extension_check_is_case_insensitive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_import_extension_check_is_case_insensitive(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     captured = {}
 
     def fake_import_pdf(pdf_path, out_dir, *, title, extract_images, detect_chapter_headings):
-        captured.update(pdf_path=pdf_path, out_dir=out_dir, title=title, extract_images=extract_images)
+        captured.update(
+            pdf_path=pdf_path, out_dir=out_dir, title=title, extract_images=extract_images
+        )
         return out_dir / "book.md"
 
     monkeypatch.setattr("mdbook_binder.pdf_import.import_pdf", fake_import_pdf)
@@ -179,7 +207,11 @@ def test_import_passes_title_and_no_images(tmp_path: Path, monkeypatch: pytest.M
     captured = {}
 
     def fake_import_pdf(pdf_path, out_dir, *, title, extract_images, detect_chapter_headings):
-        captured.update(title=title, extract_images=extract_images, detect_chapter_headings=detect_chapter_headings)
+        captured.update(
+            title=title,
+            extract_images=extract_images,
+            detect_chapter_headings=detect_chapter_headings,
+        )
         return out_dir / f"{title}.md"
 
     monkeypatch.setattr("mdbook_binder.pdf_import.import_pdf", fake_import_pdf)
@@ -196,7 +228,9 @@ def test_import_passes_title_and_no_images(tmp_path: Path, monkeypatch: pytest.M
     assert captured["detect_chapter_headings"] is True
 
 
-def test_import_no_headings_flag_disables_heading_detection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_import_no_headings_flag_disables_heading_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     captured = {}
 
     def fake_import_pdf(pdf_path, out_dir, *, title, extract_images, detect_chapter_headings):
@@ -217,12 +251,18 @@ def test_import_no_headings_flag_disables_heading_detection(tmp_path: Path, monk
 # ── translate ──────────────────────────────────────────────────────────
 
 
-def test_translate_check_only_does_not_invoke_translate_corpus(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_translate_check_only_does_not_invoke_translate_corpus(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     from mdbook_binder.check import EnvCheckItem
 
-    monkeypatch.setattr("mdbook_binder.check.check_ollama", lambda config: EnvCheckItem("번역 (Ollama)", True))
+    monkeypatch.setattr(
+        "mdbook_binder.check.check_ollama", lambda config: EnvCheckItem("번역 (Ollama)", True)
+    )
     called = []
-    monkeypatch.setattr("mdbook_binder.translation.translate_corpus", lambda *a, **k: called.append((a, k)))
+    monkeypatch.setattr(
+        "mdbook_binder.translation.translate_corpus", lambda *a, **k: called.append((a, k))
+    )
     _write(tmp_path, "chapter.md", "# 챕터\n")
 
     result = CliRunner().invoke(
@@ -235,37 +275,59 @@ def test_translate_check_only_does_not_invoke_translate_corpus(tmp_path: Path, m
     assert called == []
 
 
-def test_translate_reports_missing_ollama_as_click_exception(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_translate_reports_missing_ollama_as_click_exception(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     from mdbook_binder.check import EnvCheckItem
 
     monkeypatch.setattr(
         "mdbook_binder.check.check_ollama",
-        lambda config: EnvCheckItem("번역 (Ollama)", False, 'pip install "mdbook-binder[translate]"'),
+        lambda config: EnvCheckItem(
+            "번역 (Ollama)", False, 'pip install "mdbook-binder[translate]"'
+        ),
     )
     _write(tmp_path, "chapter.md", "# 챕터\n")
 
-    result = CliRunner().invoke(main, ["translate", str(tmp_path), str(tmp_path / "out"), "--direction", "k2e"])
+    result = CliRunner().invoke(
+        main, ["translate", str(tmp_path), str(tmp_path / "out"), "--direction", "k2e"]
+    )
 
     assert result.exit_code != 0
     assert "번역 (Ollama)" in result.output
 
 
-def test_translate_passes_direction_and_chunk_chars_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_translate_passes_direction_and_chunk_chars_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     from mdbook_binder.check import EnvCheckItem
 
-    monkeypatch.setattr("mdbook_binder.check.check_ollama", lambda config: EnvCheckItem("번역 (Ollama)", True))
-    monkeypatch.setattr("mdbook_binder.translation.make_ollama_translate_fn", lambda cfg, target: (lambda text: text))
+    monkeypatch.setattr(
+        "mdbook_binder.check.check_ollama", lambda config: EnvCheckItem("번역 (Ollama)", True)
+    )
+    monkeypatch.setattr(
+        "mdbook_binder.translation.make_ollama_translate_fn", lambda cfg, target: lambda text: text
+    )
     captured = {}
 
     def fake_translate_corpus(root, out_dir, config, target_language, translate_fn, *, chunk_chars):
-        captured.update(root=root, out_dir=out_dir, target_language=target_language, chunk_chars=chunk_chars)
+        captured.update(
+            root=root, out_dir=out_dir, target_language=target_language, chunk_chars=chunk_chars
+        )
 
     monkeypatch.setattr("mdbook_binder.translation.translate_corpus", fake_translate_corpus)
     _write(tmp_path, "chapter.md", "# 챕터\n")
 
     result = CliRunner().invoke(
         main,
-        ["translate", str(tmp_path), str(tmp_path / "out"), "--direction", "k2e", "--chunk-chars", "500"],
+        [
+            "translate",
+            str(tmp_path),
+            str(tmp_path / "out"),
+            "--direction",
+            "k2e",
+            "--chunk-chars",
+            "500",
+        ],
     )
 
     assert result.exit_code == 0, result.output

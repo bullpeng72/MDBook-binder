@@ -24,12 +24,22 @@ from mdbook_binder.pdf_import import (
 )
 
 
-def _word(text: str, x0: float, top: float, *, char_width: float = 6.0, height: float = 12.0) -> dict:
+def _word(
+    text: str, x0: float, top: float, *, char_width: float = 6.0, height: float = 12.0
+) -> dict:
     """pdfplumber의 extract_words() 반환 형식(x0/x1/top/bottom)을 흉내낸 단어 dict를 만든다."""
-    return {"text": text, "x0": x0, "x1": x0 + len(text) * char_width, "top": top, "bottom": top + height}
+    return {
+        "text": text,
+        "x0": x0,
+        "x1": x0 + len(text) * char_width,
+        "top": top,
+        "bottom": top + height,
+    }
 
 
-def _prose_words(lines: list[str], *, x_start: float = 72.0, y_start: float = 100.0, y_step: float = 20.0) -> list[dict]:
+def _prose_words(
+    lines: list[str], *, x_start: float = 72.0, y_start: float = 100.0, y_step: float = 20.0
+) -> list[dict]:
     """실제 산문처럼 줄마다 단어 시작 위치가 들쭉날쭉한 가짜 단어 목록을 만든다."""
     words: list[dict] = []
     for i, line in enumerate(lines):
@@ -48,7 +58,9 @@ def _make_minimal_pdf(lines: list[str]) -> bytes:
     들이는 것도 과하다 — PDF 포맷 자체가 단순 텍스트 객체만 쓰면 손으로도
     충분히 구성 가능해 별도 의존성/바이너리 픽스처 없이 이 방식을 쓴다.
     """
-    text_ops = "BT /F1 12 Tf 72 720 Td\n" + "\n".join(f"({line}) Tj 0 -14 Td" for line in lines) + "\nET"
+    text_ops = (
+        "BT /F1 12 Tf 72 720 Td\n" + "\n".join(f"({line}) Tj 0 -14 Td" for line in lines) + "\nET"
+    )
     stream = text_ops.encode("latin-1")
     objects = [
         b"<< /Type /Catalog /Pages 2 0 R >>",
@@ -142,8 +154,12 @@ def _make_pdf_with_font_sizes(placements: list[tuple[str, float, float, float]])
 
 
 def _make_pdf_with_image(
-    text_lines: list[tuple[str, float, float]], *, image_xy: tuple[float, float] = (100, 400),
-    image_wh: tuple[int, int] = (40, 30), image_scale: float = 4.0, image_rgb: tuple[int, int, int] = (255, 0, 0),
+    text_lines: list[tuple[str, float, float]],
+    *,
+    image_xy: tuple[float, float] = (100, 400),
+    image_wh: tuple[int, int] = (40, 30),
+    image_scale: float = 4.0,
+    image_rgb: tuple[int, int, int] = (255, 0, 0),
 ) -> bytes:
     """텍스트 배치 + 실제로 페이지에 그려진(Do 연산자로 호출된) 단색 RGB
     이미지 하나를 포함한 최소 유효 PDF를 만든다.
@@ -155,7 +171,9 @@ def _make_pdf_with_image(
     """
     w, h = image_wh
     img_bytes = bytes(image_rgb) * (w * h)
-    text_ops = " ".join(f'BT /F1 12 Tf 1 0 0 1 {x} {y} Tm ({text}) Tj ET' for text, x, y in text_lines)
+    text_ops = " ".join(
+        f"BT /F1 12 Tf 1 0 0 1 {x} {y} Tm ({text}) Tj ET" for text, x, y in text_lines
+    )
     ix, iy = image_xy
     img_ops = f"q {w * image_scale} 0 0 {h * image_scale} {ix} {iy} cm /Im1 Do Q"
     content = (text_ops + " " + img_ops).encode("latin-1")
@@ -172,7 +190,9 @@ def _make_pdf_with_image(
         (
             f"<< /Type /XObject /Subtype /Image /Width {w} /Height {h} /ColorSpace /DeviceRGB "
             f"/BitsPerComponent 8 /Length {len(img_bytes)} >>\nstream\n"
-        ).encode() + img_bytes + b"\nendstream",
+        ).encode()
+        + img_bytes
+        + b"\nendstream",
     ]
     out = bytearray(b"%PDF-1.4\n")
     offsets = [0]
@@ -196,7 +216,10 @@ class TestCleanParagraphs:
     def test_sentence_ending_punctuation_starts_new_paragraph(self):
         raw = "First sentence.\nSecond paragraph starts here, no blank line."
         # 문장부호로 끝난 줄 다음은 새 단락으로 취급된다(빈 줄이 없어도).
-        assert clean_paragraphs(raw) == "First sentence.\n\nSecond paragraph starts here, no blank line."
+        assert (
+            clean_paragraphs(raw)
+            == "First sentence.\n\nSecond paragraph starts here, no blank line."
+        )
 
     def test_hyphenated_word_break_dehyphenated(self):
         raw = "This is an exam-\nple of hyphenation."
@@ -251,13 +274,13 @@ class TestCleanParagraphs:
         assert clean_paragraphs(raw) == "◦ First\n\n‣ Second\n\n• Third"
 
     def test_hyphen_and_star_not_split_mid_line(self):
-        """"-"/"*"는 하이픈 복합어·강조 마크업과 흔히 섞여 줄 중간에서
+        """ "-"/"*"는 하이픈 복합어·강조 마크업과 흔히 섞여 줄 중간에서
         쪼개면 위험하므로 줄 시작에서만 불릿으로 인식한다."""
         raw = "This well-known model uses **bold** text, not a bullet list."
         assert clean_paragraphs(raw) == raw
 
     def test_step_marker_glued_to_preceding_bullet_is_split_out(self):
-        """"#4) Define reward functions ..."처럼 순번 표기가 앞 불릿과 한
+        """ "#4) Define reward functions ..."처럼 순번 표기가 앞 불릿과 한
         줄에 뭉쳐 나오면 그 앞에서 쪼개고 별도 단락으로 취급해야 한다."""
         raw = "● The answer in the required format #4) Define reward functions In GRPO, we validate the response."
         assert clean_paragraphs(raw) == (
@@ -387,10 +410,14 @@ class TestDetectColumns:
     def test_two_column_layout_detected_via_gutter(self):
         """실제 2단 레이아웃(같은 높이에 좌/우 컬럼)을 흉내낸 좌표로 거터를 감지한다."""
         words = [
-            _word("Left", 72, 100), _word("column", 100, 100),
-            _word("Right", 320, 100), _word("column", 348, 100),
-            _word("Left", 72, 120), _word("column", 100, 120),
-            _word("Right", 320, 120), _word("column", 348, 120),
+            _word("Left", 72, 100),
+            _word("column", 100, 100),
+            _word("Right", 320, 100),
+            _word("column", 348, 100),
+            _word("Left", 72, 120),
+            _word("column", 100, 120),
+            _word("Right", 320, 120),
+            _word("column", 348, 120),
         ]
         columns = detect_columns(words)
         assert len(columns) == 2
@@ -511,7 +538,7 @@ class TestDetectDocumentBulletChars:
         assert _detect_document_bullet_chars(raw) == {bullet}
 
     def test_common_single_letter_words_excluded_even_if_frequent(self):
-        """"a"/"i"는 실제 영어 단어라 아무리 반복돼도 불릿으로 오인하면 안 된다."""
+        """ "a"/"i"는 실제 영어 단어라 아무리 반복돼도 불릿으로 오인하면 안 된다."""
         raw = "\n".join([f"a book about topic {i}" for i in range(10)])
         assert _detect_document_bullet_chars(raw) == set()
 
@@ -552,11 +579,20 @@ class TestDetectTable:
         assert detect_table(rows) is None
 
     def test_genuine_table_detected(self):
-        data = [["Name", "Age", "City"], ["Alice", "30", "Seoul"], ["Bob", "25", "Busan"], ["Carol", "40", "Incheon"]]
+        data = [
+            ["Name", "Age", "City"],
+            ["Alice", "30", "Seoul"],
+            ["Bob", "25", "Busan"],
+            ["Carol", "40", "Incheon"],
+        ]
         words = [
             w
             for i, row in enumerate(data)
-            for w in (_word(row[0], 72, 100 + i * 20), _word(row[1], 250, 100 + i * 20), _word(row[2], 400, 100 + i * 20))
+            for w in (
+                _word(row[0], 72, 100 + i * 20),
+                _word(row[1], 250, 100 + i * 20),
+                _word(row[2], 400, 100 + i * 20),
+            )
         ]
         rows = _group_into_rows(words)
         region = detect_table(rows)
@@ -564,7 +600,11 @@ class TestDetectTable:
 
     def test_too_few_rows_not_detected_as_table(self):
         data = [["Name", "Age"], ["Alice", "30"]]
-        words = [w for i, row in enumerate(data) for w in (_word(row[0], 72, 100 + i * 20), _word(row[1], 250, 100 + i * 20))]
+        words = [
+            w
+            for i, row in enumerate(data)
+            for w in (_word(row[0], 72, 100 + i * 20), _word(row[1], 250, 100 + i * 20))
+        ]
         rows = _group_into_rows(words)
         assert detect_table(rows, min_rows=3) is None
 
@@ -585,7 +625,11 @@ class TestRowGroups:
 
 class TestStripRepeatedLines:
     def test_line_repeated_on_every_page_is_removed(self):
-        pages = ["Title A\nFooter\ncontent 1", "Title B\nFooter\ncontent 2", "Title C\nFooter\ncontent 3"]
+        pages = [
+            "Title A\nFooter\ncontent 1",
+            "Title B\nFooter\ncontent 2",
+            "Title C\nFooter\ncontent 3",
+        ]
         result = strip_repeated_lines(pages)
         assert all("Footer" not in p for p in result)
         assert "Title A" in result[0] and "content 1" in result[0]
@@ -656,8 +700,18 @@ def test_import_pdf_detects_larger_font_heading_and_enables_split(tmp_path: Path
     사이드바가 챕터별로 나뉘게 해야 한다."""
     placements = [
         ("Chapter One", 72, 700, 24),
-        ("This is the first body paragraph with plenty of words for font size calibration sampling.", 72, 670, 12),
-        ("Another body sentence here to make sure enough character samples exist for calibration.", 72, 650, 12),
+        (
+            "This is the first body paragraph with plenty of words for font size calibration sampling.",
+            72,
+            670,
+            12,
+        ),
+        (
+            "Another body sentence here to make sure enough character samples exist for calibration.",
+            72,
+            650,
+            12,
+        ),
     ]
     pdf_path = tmp_path / "book.pdf"
     pdf_path.write_bytes(_make_pdf_with_font_sizes(placements))
@@ -679,8 +733,18 @@ def test_import_pdf_detect_chapter_headings_false_skips_detection(tmp_path: Path
     달라도 헤딩을 감지하지 않고 기존 동작(단일 섹션) 그대로여야 한다."""
     placements = [
         ("Chapter One", 72, 700, 24),
-        ("This is the first body paragraph with plenty of words for font size calibration sampling.", 72, 670, 12),
-        ("Another body sentence here to make sure enough character samples exist for calibration.", 72, 650, 12),
+        (
+            "This is the first body paragraph with plenty of words for font size calibration sampling.",
+            72,
+            670,
+            12,
+        ),
+        (
+            "Another body sentence here to make sure enough character samples exist for calibration.",
+            72,
+            650,
+            12,
+        ),
     ]
     pdf_path = tmp_path / "book.pdf"
     pdf_path.write_bytes(_make_pdf_with_font_sizes(placements))
@@ -714,9 +778,12 @@ def test_import_pdf_reads_two_column_layout_in_correct_order(tmp_path: Path):
     레이아웃에서 같은 높이의 좌/우 컬럼 텍스트가 한 줄에 섞여버렸다 — 왼쪽
     컬럼을 위→아래로 다 읽은 뒤 오른쪽 컬럼으로 넘어가는 순서가 맞아야 한다."""
     placements = [
-        ("Left column line one.", 72, 700), ("Right column line one.", 320, 700),
-        ("Left column line two.", 72, 680), ("Right column line two.", 320, 680),
-        ("Left column line three.", 72, 660), ("Right column line three.", 320, 660),
+        ("Left column line one.", 72, 700),
+        ("Right column line one.", 320, 700),
+        ("Left column line two.", 72, 680),
+        ("Right column line two.", 320, 680),
+        ("Left column line three.", 72, 660),
+        ("Right column line three.", 320, 660),
     ]
     pdf_path = tmp_path / "two_col.pdf"
     pdf_path.write_bytes(_make_positioned_pdf(placements))
@@ -731,8 +798,17 @@ def test_import_pdf_reads_two_column_layout_in_correct_order(tmp_path: Path):
 
 
 def test_import_pdf_renders_genuine_table_as_markdown(tmp_path: Path):
-    data = [["Name", "Age", "City"], ["Alice", "30", "Seoul"], ["Bob", "25", "Busan"], ["Carol", "40", "Incheon"]]
-    placements = [(cell, x, 700 - i * 20) for i, row in enumerate(data) for cell, x in zip(row, (72, 250, 400))]
+    data = [
+        ["Name", "Age", "City"],
+        ["Alice", "30", "Seoul"],
+        ["Bob", "25", "Busan"],
+        ["Carol", "40", "Incheon"],
+    ]
+    placements = [
+        (cell, x, 700 - i * 20)
+        for i, row in enumerate(data)
+        for cell, x in zip(row, (72, 250, 400))
+    ]
     pdf_path = tmp_path / "table.pdf"
     pdf_path.write_bytes(_make_positioned_pdf(placements))
     out_dir = tmp_path / "corpus"
@@ -746,7 +822,15 @@ def test_import_pdf_renders_genuine_table_as_markdown(tmp_path: Path):
 
 
 def _fake_image(hash_val: str, x0: float = 0, top: float = 0) -> dict:
-    return {"x0": x0, "x1": x0 + 40, "top": top, "bottom": top + 40, "data": b"fake", "ext": "png", "hash": hash_val}
+    return {
+        "x0": x0,
+        "x1": x0 + 40,
+        "top": top,
+        "bottom": top + 40,
+        "data": b"fake",
+        "ext": "png",
+        "hash": hash_val,
+    }
 
 
 class TestFilterRepeatedImages:
@@ -773,7 +857,18 @@ class TestFilterRepeatedImages:
 
 class TestSaveImagesAndBuildElements:
     def test_writes_file_and_returns_positioned_markdown_element(self, tmp_path: Path):
-        pages_images = [[{"x0": 10.0, "x1": 50.0, "top": 20.0, "bottom": 60.0, "data": b"pngdata", "ext": "png"}]]
+        pages_images = [
+            [
+                {
+                    "x0": 10.0,
+                    "x1": 50.0,
+                    "top": 20.0,
+                    "bottom": 60.0,
+                    "data": b"pngdata",
+                    "ext": "png",
+                }
+            ]
+        ]
         images_dir = tmp_path / "images"
 
         result = _save_images_and_build_elements(pages_images, images_dir)
@@ -795,7 +890,9 @@ class TestSaveImagesAndBuildElements:
 def test_import_pdf_extracts_image_and_places_it_in_reading_order(tmp_path: Path):
     pdf_path = tmp_path / "with_image.pdf"
     pdf_path.write_bytes(
-        _make_pdf_with_image([("Before the image.", 72, 700), ("After the image.", 72, 300)], image_xy=(100, 500))
+        _make_pdf_with_image(
+            [("Before the image.", 72, 700), ("After the image.", 72, 300)], image_xy=(100, 500)
+        )
     )
     out_dir = tmp_path / "corpus"
 
@@ -807,7 +904,9 @@ def test_import_pdf_extracts_image_and_places_it_in_reading_order(tmp_path: Path
     before_idx = body.index("Before the image.")
     image_idx = body.index("![](images/")
     after_idx = body.index("After the image.")
-    assert before_idx < image_idx < after_idx, "이미지가 실제 페이지 위치(중간)가 아니라 엉뚱한 순서에 배치됨"
+    assert before_idx < image_idx < after_idx, (
+        "이미지가 실제 페이지 위치(중간)가 아니라 엉뚱한 순서에 배치됨"
+    )
 
 
 def test_import_pdf_extract_images_false_skips_images(tmp_path: Path):

@@ -192,7 +192,9 @@ def translate_corpus(
     재작성한다(book.yaml이 없던 코퍼스면 최소 book.yaml을 새로 만든다).
     """
     effective_chunk_chars = chunk_chars or (
-        config.translation.chunk_chars if (config and config.translation) else TranslationConfig().chunk_chars
+        config.translation.chunk_chars
+        if (config and config.translation)
+        else TranslationConfig().chunk_chars
     )
 
     chapters = resolve(root, config)
@@ -205,7 +207,9 @@ def translate_corpus(
         text = chap.path.read_text(encoding="utf-8")
         incomplete_chunks: list[int] = []
         out_text = translate_chapter(
-            text, effective_chunk_chars, translate_fn,
+            text,
+            effective_chunk_chars,
+            translate_fn,
             target_language=target_language,
             on_chunk_start=lambda j, n: print(f"  청크 {j}/{n} 번역 중..."),
             on_incomplete=lambda j, n, _sink=incomplete_chunks: _sink.append(j),
@@ -222,11 +226,15 @@ def translate_corpus(
     _write_translated_book_yaml(root, out_dir, target_language)
 
     if incomplete_chapters:
-        print(f"\n⚠️  총 {len(incomplete_chapters)}개 챕터에 재시도 후에도 번역되지 않은 청크가 있습니다:")
+        print(
+            f"\n⚠️  총 {len(incomplete_chapters)}개 챕터에 재시도 후에도 번역되지 않은 청크가 있습니다:"
+        )
         for item in incomplete_chapters:
             print(f"   - {item}")
-        print("   해당 구간을 직접 열어 확인하거나, translate를 다시 실행해보세요"
-              "(로컬 LLM 출력은 비결정적이라 재실행 시 통과하는 경우가 있습니다).")
+        print(
+            "   해당 구간을 직접 열어 확인하거나, translate를 다시 실행해보세요"
+            "(로컬 LLM 출력은 비결정적이라 재실행 시 통과하는 경우가 있습니다)."
+        )
 
     return out_dir
 
@@ -249,7 +257,9 @@ def _write_translated_book_yaml(root: Path, out_dir: Path, target_language: str)
 
     data = yaml.safe_load(src_path.read_text(encoding="utf-8")) or {}
     data["language"] = target_language
-    dest_path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    dest_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
 
 
 def _build_prompt(chunk: str, target_language: str) -> str:
@@ -302,12 +312,16 @@ def make_ollama_translate_fn(cfg: TranslationConfig, target_language: str) -> Ca
     resolved_model = resolve_model_name(cfg.model, available)
     if resolved_model is None:
         available_desc = ", ".join(available) if available else "없음"
-        raise RuntimeError(f"Ollama 모델을 찾을 수 없습니다: {cfg.model!r} (설치된 모델: {available_desc})")
+        raise RuntimeError(
+            f"Ollama 모델을 찾을 수 없습니다: {cfg.model!r} (설치된 모델: {available_desc})"
+        )
     if resolved_model != cfg.model:
         print(f"  ℹ️  요청한 모델 '{cfg.model}'을 찾지 못해 '{resolved_model}'을 대신 씁니다")
 
     def _translate(chunk: str) -> str:
-        response = client.generate(model=resolved_model, prompt=_build_prompt(chunk, target_language))
+        response = client.generate(
+            model=resolved_model, prompt=_build_prompt(chunk, target_language)
+        )
         return response.response.strip()
 
     return _translate

@@ -81,14 +81,16 @@ class BookHTMLEditor:
             else:
                 status = "original"
 
-            sections.append({
-                "id": sec_id,
-                "title": sec_title,
-                "word_count": word_count,
-                "image_count": img_count,
-                "diagram_count": dgm_count,
-                "status": status,
-            })
+            sections.append(
+                {
+                    "id": sec_id,
+                    "title": sec_title,
+                    "word_count": word_count,
+                    "image_count": img_count,
+                    "diagram_count": dgm_count,
+                    "status": status,
+                }
+            )
 
         return {"title": title, "sections": sections}
 
@@ -273,10 +275,12 @@ class BookHTMLEditor:
                 preserved.append(("heading", child))
             elif child.name == "figure":
                 preserved.append(("figure", child))
-            elif child.name == "div" and (
-                "my-8" in (child.get("class") or [])
-                and child.find("div", class_="mermaid")
-            ) or child.name == "div" and "mermaid" in (child.get("class") or []):
+            elif (
+                child.name == "div"
+                and ("my-8" in (child.get("class") or []) and child.find("div", class_="mermaid"))
+                or child.name == "div"
+                and "mermaid" in (child.get("class") or [])
+            ):
                 preserved.append(("diagram", child))
 
         sec.clear()

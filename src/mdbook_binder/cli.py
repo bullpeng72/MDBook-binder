@@ -1,11 +1,11 @@
 """mdbook-binder CLI.
 
-    mdbook-binder check       <root>                                     빌드 전 사전 점검
-    mdbook-binder build html  <root> [--out FILE] [--title TITLE] [--language ko|en] [--color NAME]
-    mdbook-binder build pdf   <root> [--merge [이름]] [--out-dir ...] [--color NAME]
-    mdbook-binder edit        <html>  [--port 5757] [--out ...] [--no-browser]
-    mdbook-binder import      <pdf> <out_dir> [--title TITLE]
-    mdbook-binder translate   <root> <out_dir> --direction k2e|e2k [--model ...] [--host ...]
+mdbook-binder check       <root>                                     빌드 전 사전 점검
+mdbook-binder build html  <root> [--out FILE] [--title TITLE] [--language ko|en] [--color NAME]
+mdbook-binder build pdf   <root> [--merge [이름]] [--out-dir ...] [--color NAME]
+mdbook-binder edit        <html>  [--port 5757] [--out ...] [--no-browser]
+mdbook-binder import      <pdf> <out_dir> [--title TITLE]
+mdbook-binder translate   <root> <out_dir> --direction k2e|e2k [--model ...] [--host ...]
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ def main() -> None:
     epilog="""\b
 예시:
   mdbook-binder check ~/my-book
-"""
+""",
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
 def check_cmd(root: Path) -> None:
@@ -99,7 +99,7 @@ def check_cmd(root: Path) -> None:
   mdbook-binder build pdf  <ROOT> [--merge [이름]] [--out-dir ...]
 
 옵션은 `build html --help` / `build pdf --help`로 확인.
-"""
+""",
 )
 def build() -> None:
     """HTML 또는 PDF 도서를 빌드한다.
@@ -119,19 +119,26 @@ def build() -> None:
   mdbook-binder build html ~/my-book
   mdbook-binder build html ~/my-book --title "나의 책" --language en
   mdbook-binder build html ~/my-book --out ./dist/book.html --color teal
-"""
+""",
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option(
-    "--out", "out_path", type=click.Path(path_type=Path), default=None,
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
     help="출력 경로 (기본: ROOT/<제목 슬러그>.html)",
 )
 @click.option(
-    "--title", "title_override", default=None,
+    "--title",
+    "title_override",
+    default=None,
     help="도서 제목 (기본: book.yaml title/디렉토리명)",
 )
 @click.option(
-    "--language", "language_override", default=None,
+    "--language",
+    "language_override",
+    default=None,
     help="UI 로케일 (기본: book.yaml language 또는 ko)",
 )
 @click.option("--color", "color_override", type=_COLOR_CHOICE, default=None, help=_COLOR_HELP)
@@ -177,16 +184,23 @@ def build_html_cmd(
   mdbook-binder build pdf ~/my-book                # 챕터별 PDF
   mdbook-binder build pdf ~/my-book --merge         # 한 권으로 병합
   mdbook-binder build pdf ~/my-book --merge my_book --out-dir ./dist
-"""
+""",
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.option(
-    "--merge", "merge_out", is_flag=False, flag_value="full_book", default=None,
+    "--merge",
+    "merge_out",
+    is_flag=False,
+    flag_value="full_book",
+    default=None,
     metavar="[이름]",
     help="한 권으로 병합 (기본 full_book.pdf)",
 )
 @click.option(
-    "--out-dir", "out_dir", type=click.Path(path_type=Path), default=None,
+    "--out-dir",
+    "out_dir",
+    type=click.Path(path_type=Path),
+    default=None,
     help="출력 디렉토리 (기본: ROOT/pdf)",
 )
 @click.option("--color", "color_override", type=_COLOR_CHOICE, default=None, help=_COLOR_HELP)
@@ -221,12 +235,15 @@ def build_pdf_cmd(
   mdbook-binder edit my-book.html
   mdbook-binder edit my-book.html --port 8080 --out final.html
   mdbook-binder edit my-book.html --no-browser   # URL 직접 열기
-"""
+""",
 )
 @click.argument("html_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.option("--port", "-p", type=int, default=5757, help="에디터 서버 포트 (기본: 5757)")
 @click.option(
-    "--out", "out_path", type=click.Path(path_type=Path), default=None,
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
     help="저장 경로 (기본: <stem>_edited.html, 원본 유지)",
 )
 @click.option("--no-browser", is_flag=True, default=False, help="브라우저 자동 오픈 생략")
@@ -260,14 +277,21 @@ def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool
   mdbook-binder import ./book.pdf ./corpus-en
   mdbook-binder import ./book.pdf ./corpus-en --title "My Book"
   mdbook-binder import ./book.pdf ./corpus-en --no-images
-"""
+""",
 )
 @click.argument("pdf_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
 @click.argument("out_dir", type=click.Path(path_type=Path))
-@click.option("--title", "title_override", default=None, help="제목/파일명 오버라이드 (기본: PDF 파일명)")
-@click.option("--no-images", "no_images", is_flag=True, default=False, help="이미지 추출 없이 텍스트만 뽑는다")
 @click.option(
-    "--no-headings", "no_headings", is_flag=True, default=False,
+    "--title", "title_override", default=None, help="제목/파일명 오버라이드 (기본: PDF 파일명)"
+)
+@click.option(
+    "--no-images", "no_images", is_flag=True, default=False, help="이미지 추출 없이 텍스트만 뽑는다"
+)
+@click.option(
+    "--no-headings",
+    "no_headings",
+    is_flag=True,
+    default=False,
     help="폰트 크기 기반 챕터 제목(## 마커) 자동 감지를 끈다",
 )
 def import_cmd(
@@ -294,7 +318,9 @@ def import_cmd(
     translate가 바로 받는 유효한 코퍼스다.
     """
     if pdf_path.suffix.lower() != ".pdf":
-        raise click.ClickException(f"PDF 파일만 지원합니다 (받은 파일: {pdf_path.name}) — docx 등은 PDF로 변환 후 다시 시도하세요")
+        raise click.ClickException(
+            f"PDF 파일만 지원합니다 (받은 파일: {pdf_path.name}) — docx 등은 PDF로 변환 후 다시 시도하세요"
+        )
 
     from mdbook_binder.pdf_import import import_pdf
 
@@ -316,26 +342,42 @@ def import_cmd(
   mdbook-binder translate ~/book ~/book-ko --direction e2k
   mdbook-binder translate ~/book ~/book-ko --direction e2k --check-only
   mdbook-binder translate ~/book ~/book-en --direction k2e --model exaone3.5
-"""
+""",
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
 @click.argument("out_dir", type=click.Path(path_type=Path))
 @click.option(
-    "--direction", type=click.Choice(["k2e", "e2k"]), required=True,
+    "--direction",
+    type=click.Choice(["k2e", "e2k"]),
+    required=True,
     help="k2e: 한국어→영어, e2k: 영어→한국어",
 )
 @click.option(
-    "--model", "model_override", default=None,
+    "--model",
+    "model_override",
+    default=None,
     help="Ollama 모델 (기본: exaone3.5:7.8b 또는 book.yaml)",
 )
 @click.option(
-    "--host", "host_override", default=None,
+    "--host",
+    "host_override",
+    default=None,
     help="Ollama 서버 (기본: localhost:11434 또는 book.yaml)",
 )
-@click.option("--timeout", "timeout_override", type=int, default=None, help="청크당 타임아웃(초) 오버라이드")
-@click.option("--chunk-chars", "chunk_chars_override", type=int, default=None, help="청크 최대 글자수 오버라이드")
 @click.option(
-    "--check-only", is_flag=True, default=False,
+    "--timeout", "timeout_override", type=int, default=None, help="청크당 타임아웃(초) 오버라이드"
+)
+@click.option(
+    "--chunk-chars",
+    "chunk_chars_override",
+    type=int,
+    default=None,
+    help="청크 최대 글자수 오버라이드",
+)
+@click.option(
+    "--check-only",
+    is_flag=True,
+    default=False,
     help="번역 없이 Ollama 연결·모델 설치 상태만 확인",
 )
 def translate_cmd(
@@ -386,7 +428,9 @@ def translate_cmd(
 
     translate_fn = make_ollama_translate_fn(cfg, target_language)
     print(f"\U0001f310 Translating {root} → {out_dir} ({direction}) via {cfg.model}@{cfg.host} ...")
-    translate_corpus(root, out_dir, config, target_language, translate_fn, chunk_chars=cfg.chunk_chars)
+    translate_corpus(
+        root, out_dir, config, target_language, translate_fn, chunk_chars=cfg.chunk_chars
+    )
     print(f"✅ {out_dir}")
 
 

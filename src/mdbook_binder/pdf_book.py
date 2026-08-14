@@ -144,7 +144,9 @@ def _chunk_boundaries(
     return boundaries
 
 
-async def _measure_remaining_space(render_page, container, page_h: float, temp_dir: Path, seq: int) -> float | None:
+async def _measure_remaining_space(
+    render_page, container, page_h: float, temp_dir: Path, seq: int
+) -> float | None:
     """컨테이너가 문서 흐름상 시작하는 지점에서, 실제로 인쇄될 페이지에 남은
     공간을 측정한다.
 
@@ -282,9 +284,7 @@ async def convert_one(
     raw = chapter.path.read_text(encoding="utf-8")
     body = md_to_html(raw, tip_pattern)
     title = extract_h1_text(body) or chapter.path.stem
-    html = _rewrite_img_paths(
-        _build_pdf_page_html(body, title, custom_css), chapter.path.parent
-    )
+    html = _rewrite_img_paths(_build_pdf_page_html(body, title, custom_css), chapter.path.parent)
 
     temp_dir = Path(tempfile.mkdtemp(prefix="book_binder_pdf_"))
     try:
@@ -302,7 +302,9 @@ async def convert_one(
         render_page = await ctx1.new_page()
         await render_page.set_content(html, wait_until="networkidle")
         try:
-            await render_page.wait_for_function("() => window.__mermaidDone === true", timeout=20000)
+            await render_page.wait_for_function(
+                "() => window.__mermaidDone === true", timeout=20000
+            )
         except Exception:
             pass
         full_h = await render_page.evaluate("() => Math.max(document.body.scrollHeight, 6000)")
@@ -385,7 +387,9 @@ async def convert_one(
                 # container 자체를 청크 이미지로 교체한다 — 문자열 정규식이 아니라
                 # DOM 노드 단위 치환이라, mermaid SVG 내부에 중첩된 <div>(foreignObject
                 # 라벨)가 몇 개든 컨테이너 경계를 잘못 잡을 일이 없다.
-                await container.evaluate("(el, html) => { el.outerHTML = html; }", _mermaid_chunk_html(chunks))
+                await container.evaluate(
+                    "(el, html) => { el.outerHTML = html; }", _mermaid_chunk_html(chunks)
+                )
             except Exception:
                 continue
 
@@ -444,7 +448,9 @@ async def _run_all(
             rel = chapter.path.relative_to(root)
             out_path = pdf_dir / rel.with_suffix(".pdf")
             try:
-                await convert_one(chapter, browser, tip_pattern, out_path=out_path, custom_css=custom_css)
+                await convert_one(
+                    chapter, browser, tip_pattern, out_path=out_path, custom_css=custom_css
+                )
                 ok += 1
             except Exception as exc:
                 # 여러 챕터 결과가 한 줄씩 나열되는 목록이라, 예외가 여러 줄이면

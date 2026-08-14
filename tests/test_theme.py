@@ -40,9 +40,7 @@ def _write(root: Path, rel: str, content: str) -> Path:
 
 def test_build_html_color_override_wins_over_default(tmp_path: Path):
     _write(tmp_path, "a.md", "# A\n\n본문.\n")
-    out = build_html(
-        tmp_path, config=None, out_path=tmp_path / "out.html", color_override="green"
-    )
+    out = build_html(tmp_path, config=None, out_path=tmp_path / "out.html", color_override="green")
     html = out.read_text(encoding="utf-8")
     primary, primary_light, accent = THEMES["green"]
     assert f"--primary: {primary};" in html

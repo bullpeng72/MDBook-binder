@@ -39,7 +39,9 @@ def _blank_pdf(n_pages: int) -> io.BytesIO:
     return buf
 
 
-def _flatten_outline(items: list, reader: pypdf.PdfReader, depth: int = 0) -> list[tuple[str, int, int]]:
+def _flatten_outline(
+    items: list, reader: pypdf.PdfReader, depth: int = 0
+) -> list[tuple[str, int, int]]:
     """pypdf의 중첩 outline 리스트를 (제목, 중첩깊이, 페이지번호) 튜플로 평탄화한다."""
     flat: list[tuple[str, int, int]] = []
     for item in items:
@@ -50,7 +52,9 @@ def _flatten_outline(items: list, reader: pypdf.PdfReader, depth: int = 0) -> li
     return flat
 
 
-def _build_and_read_outline(entries: list[tuple[ChapterFile, str, int]]) -> list[tuple[str, int, int]]:
+def _build_and_read_outline(
+    entries: list[tuple[ChapterFile, str, int]],
+) -> list[tuple[str, int, int]]:
     """entries의 각 챕터를 빈 PDF로 순서대로 append하고 `_add_merge_outline`을
     적용한 뒤, 그 결과를 다시 읽어 평탄화된 outline을 반환한다."""
     writer = pypdf.PdfWriter()

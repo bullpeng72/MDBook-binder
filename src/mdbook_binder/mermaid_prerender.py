@@ -110,7 +110,9 @@ def prerender_mermaid(sections_html: str) -> tuple[str, bool]:
     try:
         svgs = _render_svgs(codes)
     except Exception as exc:
-        print(f"  ⚠️  Mermaid 사전 렌더링 불가({_summarize_exc(exc)}) — 열람 시 CDN mermaid.js로 렌더링됩니다")
+        print(
+            f"  ⚠️  Mermaid 사전 렌더링 불가({_summarize_exc(exc)}) — 열람 시 CDN mermaid.js로 렌더링됩니다"
+        )
         return sections_html, True
 
     needs_cdn = False

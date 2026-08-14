@@ -51,15 +51,17 @@ class ImageEditor:
     def _extract_images(self) -> list[dict]:
         images = []
         for idx, img_tag in enumerate(self.soup.find_all("img"), 1):
-            images.append({
-                "index": idx,
-                "tag": img_tag,
-                "src": img_tag.get("src", ""),
-                "alt": img_tag.get("alt", ""),
-                "caption": self._extract_caption(img_tag),
-                "section": self._find_section(img_tag),
-                "page": self._extract_page_number(img_tag),
-            })
+            images.append(
+                {
+                    "index": idx,
+                    "tag": img_tag,
+                    "src": img_tag.get("src", ""),
+                    "alt": img_tag.get("alt", ""),
+                    "caption": self._extract_caption(img_tag),
+                    "section": self._find_section(img_tag),
+                    "page": self._extract_page_number(img_tag),
+                }
+            )
         return images
 
     def _extract_diagrams(self) -> list[dict]:
@@ -74,15 +76,17 @@ class ImageEditor:
             words = code.split()
             diagram_type = words[0].lower() if words else "diagram"
 
-            diagrams.append({
-                "index": idx,
-                "mermaid_div": mermaid_div,
-                "container": container,
-                "mermaid_code": code,
-                "title": title,
-                "diagram_type": diagram_type,
-                "section": self._find_section(mermaid_div),
-            })
+            diagrams.append(
+                {
+                    "index": idx,
+                    "mermaid_div": mermaid_div,
+                    "container": container,
+                    "mermaid_code": code,
+                    "title": title,
+                    "diagram_type": diagram_type,
+                    "section": self._find_section(mermaid_div),
+                }
+            )
         return diagrams
 
     def _extract_caption(self, img_tag) -> str:
@@ -125,35 +129,41 @@ class ImageEditor:
             if tag.name == "img" and id(tag) in img_by_id:
                 img = img_by_id[id(tag)]
                 status = (
-                    "delete" if img["index"] in self.changes["delete"]
-                    else "replace" if img["index"] in self.changes["replace"]
+                    "delete"
+                    if img["index"] in self.changes["delete"]
+                    else "replace"
+                    if img["index"] in self.changes["replace"]
                     else "keep"
                 )
-                elements.append({
-                    "kind": "image",
-                    "img_index": img["index"],
-                    "dgm_index": None,
-                    "title": (img["alt"] or img["caption"] or "설명 없음")[:50],
-                    "section": img["section"],
-                    "extra": f"p.{img['page']}" if img["page"] else "-",
-                    "status": status,
-                })
+                elements.append(
+                    {
+                        "kind": "image",
+                        "img_index": img["index"],
+                        "dgm_index": None,
+                        "title": (img["alt"] or img["caption"] or "설명 없음")[:50],
+                        "section": img["section"],
+                        "extra": f"p.{img['page']}" if img["page"] else "-",
+                        "status": status,
+                    }
+                )
             elif tag.name == "div" and "mermaid" in (tag.get("class") or []):
                 tag_id = id(tag)
                 if tag_id in dgm_by_id and tag_id not in seen_dgm_ids:
                     seen_dgm_ids.add(tag_id)
                     dgm = dgm_by_id[tag_id]
                     status = "delete" if dgm["index"] in self.changes["diagram_delete"] else "keep"
-                    elements.append({
-                        "kind": "diagram",
-                        "img_index": None,
-                        "dgm_index": dgm["index"],
-                        "title": dgm["title"][:50],
-                        "section": dgm["section"],
-                        "extra": dgm["diagram_type"],
-                        "mermaid_code": dgm["mermaid_code"],
-                        "status": status,
-                    })
+                    elements.append(
+                        {
+                            "kind": "diagram",
+                            "img_index": None,
+                            "dgm_index": dgm["index"],
+                            "title": dgm["title"][:50],
+                            "section": dgm["section"],
+                            "extra": dgm["diagram_type"],
+                            "mermaid_code": dgm["mermaid_code"],
+                            "status": status,
+                        }
+                    )
 
         for i, el in enumerate(elements, 1):
             el["display_index"] = i
@@ -223,15 +233,25 @@ class ImageEditor:
             score = 5
             if page_match and current_page:
                 page_diff = abs(page_match - current_page)
-                score = 100 if page_diff == 0 else 50 if page_diff <= 2 else 25 if page_diff <= 5 else 10
+                score = (
+                    100
+                    if page_diff == 0
+                    else 50
+                    if page_diff <= 2
+                    else 25
+                    if page_diff <= 5
+                    else 10
+                )
 
-            alternatives.append({
-                "path": str(img_file),
-                "page": page_match,
-                "source": img_file.parent.name,
-                "filename": img_file.name,
-                "score": score,
-            })
+            alternatives.append(
+                {
+                    "path": str(img_file),
+                    "page": page_match,
+                    "source": img_file.parent.name,
+                    "filename": img_file.name,
+                    "score": score,
+                }
+            )
 
         alternatives.sort(key=lambda x: x["score"], reverse=True)
         alternatives = alternatives[:max_results]
@@ -253,7 +273,9 @@ class ImageEditor:
     def save_changes(self, output_path: str | None = None) -> str:
         """스테이징된 이미지/다이어그램 변경을 적용하고 HTML을 저장한다."""
         if output_path is None:
-            output_path = str(self.html_path.parent / f"{self.html_path.stem}_edited{self.html_path.suffix}")
+            output_path = str(
+                self.html_path.parent / f"{self.html_path.stem}_edited{self.html_path.suffix}"
+            )
 
         for img_index in sorted(self.changes["delete"], reverse=True):
             img_tag = self.images[img_index - 1]["tag"]

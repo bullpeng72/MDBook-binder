@@ -48,10 +48,10 @@ def test_subgraph_title_untouched_even_when_long():
     # 한 줄 기준 고정값으로 계산해, 여기서 두 줄로 접으면 둘째 줄이 서브그래프
     # 첫 자식 노드와 겹쳐 보인다(모듈 docstring 참고).
     code = (
-        'flowchart TB\n'
+        "flowchart TB\n"
         '    subgraph Session1["세션 1 — book-forge draft 아주 아주 긴 제목입니다"]\n'
         '        D["짧은 라벨"]\n'
-        '    end\n'
+        "    end\n"
     )
     out = auto_wrap_long_labels(code)
     assert 'subgraph Session1["세션 1 — book-forge draft 아주 아주 긴 제목입니다"]' in out
@@ -59,10 +59,10 @@ def test_subgraph_title_untouched_even_when_long():
 
 def test_node_label_inside_subgraph_still_wraps():
     code = (
-        'flowchart TB\n'
+        "flowchart TB\n"
         '    subgraph S["짧은 제목"]\n'
         '        D{"이 함수가 부작용을일으키는가? (D.1 질문 5)"}\n'
-        '    end\n'
+        "    end\n"
     )
     out = auto_wrap_long_labels(code)
     assert "\\n" in out

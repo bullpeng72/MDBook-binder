@@ -90,7 +90,11 @@ def test_cross_chapter_md_link_rewritten_to_anchor(tmp_path: Path):
         "Part_I_A/Chapter_01_x.md",
         "# X\n\n뒤쪽 챕터를 가리키는 [링크](../Part_II_B/Chapter_02_y.md) 있음.\n",
     )
-    _write(tmp_path, "Part_II_B/Chapter_02_y.md", "# Y\n\n앞쪽 챕터로 [역참조](../Part_I_A/Chapter_01_x.md).\n")
+    _write(
+        tmp_path,
+        "Part_II_B/Chapter_02_y.md",
+        "# Y\n\n앞쪽 챕터로 [역참조](../Part_I_A/Chapter_01_x.md).\n",
+    )
 
     out = build_html(tmp_path, config=None, out_path=tmp_path / "out.html")
     html = out.read_text(encoding="utf-8")
@@ -104,7 +108,9 @@ def test_cross_chapter_md_link_rewritten_to_anchor(tmp_path: Path):
 def test_link_to_excluded_file_left_unchanged(tmp_path: Path):
     """빌드 코퍼스 밖의 .md(예: Skills/ 같은 의도적 제외 디렉토리)를 가리키는 링크는
     앵커로 바꿀 대상이 없으므로 원본 href를 그대로 유지해야 한다."""
-    _write(tmp_path, "Part_I_A/Chapter_01_x.md", "# X\n\n[스킬 템플릿](../Skills/foo/SKILL.md) 참고.\n")
+    _write(
+        tmp_path, "Part_I_A/Chapter_01_x.md", "# X\n\n[스킬 템플릿](../Skills/foo/SKILL.md) 참고.\n"
+    )
     _write(tmp_path, "Skills/foo/SKILL.md", "skill 파일 — 챕터 코퍼스 밖")
 
     out = build_html(tmp_path, config=None, out_path=tmp_path / "out.html")
@@ -142,7 +148,11 @@ def test_cross_chapter_link_survives_nfc_nfd_mismatch(tmp_path: Path):
     조건을 재현하게 만든다. 링크 텍스트는 그대로 NFC로 남겨 실제 버그 조건(파일명
     NFD ↔ 링크 텍스트 NFC)을 정확히 재현한다.
     """
-    _write(tmp_path, "Part_I_A/Chapter_01_x.md", "# X\n\n[다음](../Part_II_B/Chapter_02_정의.md) 챕터.\n")
+    _write(
+        tmp_path,
+        "Part_I_A/Chapter_01_x.md",
+        "# X\n\n[다음](../Part_II_B/Chapter_02_정의.md) 챕터.\n",
+    )
     nfc_target = _write(tmp_path, "Part_II_B/Chapter_02_정의.md", "# Y\n\n본문.\n")
     nfd_name = unicodedata.normalize("NFD", nfc_target.name)
     assert nfd_name != nfc_target.name, "테스트 전제 오류: 이 이름엔 애초에 NFC/NFD 차이가 없음"

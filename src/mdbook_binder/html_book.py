@@ -65,7 +65,9 @@ def _extract_raw_h1(text: str) -> str | None:
 
 
 def _section_id(fpath: Path, html_body: str, config: BookConfig | None) -> str:
-    if config and (override := config.section_id_overrides.get(unicodedata.normalize("NFC", fpath.stem))):
+    if config and (
+        override := config.section_id_overrides.get(unicodedata.normalize("NFC", fpath.stem))
+    ):
         return override
     title = extract_h1_text(html_body)
     return _slugify(title or fpath.stem)
@@ -120,9 +122,7 @@ def _rewrite_internal_links(html_body: str, chap_dir: Path, path_to_sid: dict[st
     return re.sub(r'href="([^"]+)"', _replace, html_body)
 
 
-def _embed_images_as_data_uri(
-    html_str: str, md_dir: Path, missing: list[tuple[Path, str]]
-) -> str:
+def _embed_images_as_data_uri(html_str: str, md_dir: Path, missing: list[tuple[Path, str]]) -> str:
     """img src를 base64 data URI로 인라인 임베드한다.
 
     http(s)://, data:, file://, # 로 시작하는 src는 이미 절대/인라인이므로 그대로 둔다.
@@ -216,7 +216,9 @@ def build_html(
             toc_entries.append(f'<a class="part-heading">{_html_escape(chap.part_label)}</a>')
             last_part = chap.part_label
 
-        toc_entries.append(f'<a class="chapter toc-link" href="#{sid}">{_html_escape(title_text)}</a>')
+        toc_entries.append(
+            f'<a class="chapter toc-link" href="#{sid}">{_html_escape(title_text)}</a>'
+        )
         sections.append(
             f'<section class="chapter-section" id="{sid}" data-section-title="{_html_escape(title_text)}">'
             f"\n{html_body}\n</section>"
@@ -262,7 +264,11 @@ def build_html(
     out = out_path or (root / f"{_slugify(title)}.html")
     out.write_text(html, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
-    file_note = f"{len(chapters)}개 파일" if len(sections) == len(chapters) else f"{len(chapters)}개 파일 → {len(sections)}개 섹션"
+    file_note = (
+        f"{len(chapters)}개 파일"
+        if len(sections) == len(chapters)
+        else f"{len(chapters)}개 파일 → {len(sections)}개 섹션"
+    )
     print(f"\n✅ Done: {out}  ({size_kb} KB, {file_note})")
 
     if missing_images:
@@ -272,7 +278,7 @@ def build_html(
                 rel = abs_path.relative_to(root)
             except ValueError:
                 rel = abs_path
-            print(f"   - {rel}  (참조: \"{src}\")")
+            print(f'   - {rel}  (참조: "{src}")')
 
     return out
 

@@ -261,26 +261,30 @@ def create_app(html_path: str, output_path: str | None = None) -> Flask:
                         continue
                     if query and query not in img_file.name.lower():
                         continue
-                    all_images.append({
-                        "path": str(img_file),
-                        "name": img_file.name,
-                        "session": img_file.parent.name,
-                        "size": img_file.stat().st_size,
-                    })
+                    all_images.append(
+                        {
+                            "path": str(img_file),
+                            "name": img_file.name,
+                            "session": img_file.parent.name,
+                            "size": img_file.stat().st_size,
+                        }
+                    )
 
             total = len(all_images)
             start = (page - 1) * per_page
-            page_images = all_images[start: start + per_page]
+            page_images = all_images[start : start + per_page]
             for item in page_images:
                 item["thumbnail"] = _encode_image_thumbnail(item["path"])
 
-            return jsonify({
-                "images": page_images,
-                "total": total,
-                "page": page,
-                "per_page": per_page,
-                "pages": max(1, (total + per_page - 1) // per_page),
-            })
+            return jsonify(
+                {
+                    "images": page_images,
+                    "total": total,
+                    "page": page,
+                    "per_page": per_page,
+                    "pages": max(1, (total + per_page - 1) // per_page),
+                }
+            )
         except Exception as exc:
             logger.error(f"api_gallery error: {exc}")
             return jsonify({"error": str(exc)}), 500
@@ -308,6 +312,7 @@ def create_app(html_path: str, output_path: str | None = None) -> Flask:
         if src.startswith("data:"):
             try:
                 from flask import Response
+
                 header, data = src.split(",", 1)
                 mime = header.split(";")[0].replace("data:", "") or "image/jpeg"
                 return Response(base64.b64decode(data), mimetype=mime)
@@ -370,12 +375,14 @@ def create_app(html_path: str, output_path: str | None = None) -> Flask:
             save_path = upload_dir / unique_name
             f.save(str(save_path))
 
-            return jsonify({
-                "success": True,
-                "path": str(save_path),
-                "name": unique_name,
-                "thumbnail": _encode_image_thumbnail(str(save_path)),
-            })
+            return jsonify(
+                {
+                    "success": True,
+                    "path": str(save_path),
+                    "name": unique_name,
+                    "thumbnail": _encode_image_thumbnail(str(save_path)),
+                }
+            )
         except Exception as exc:
             logger.error(f"api_upload_image error: {exc}")
             return jsonify({"error": str(exc)}), 500
@@ -392,6 +399,7 @@ def create_app(html_path: str, output_path: str | None = None) -> Flask:
             # image_editor는 별도 soup 인스턴스를 갖고 있으므로, 갱신된 트리의
             # 실제 노드로 참조를 다시 매핑해야 삭제/교체가 반영된다.
             from collections import defaultdict
+
             src_map: dict = defaultdict(list)
             for tag in updated_soup.find_all("img"):
                 src_map[tag.get("src", "")].append(tag)
@@ -424,6 +432,7 @@ def create_app(html_path: str, output_path: str | None = None) -> Flask:
     def api_shutdown():
         def _stop():
             import time
+
             time.sleep(0.3)
             os._exit(0)
 
@@ -469,6 +478,7 @@ def run_editor(
 
         def _open():
             import time
+
             time.sleep(0.8)
             webbrowser.open(f"http://localhost:{port}")
 

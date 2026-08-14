@@ -57,7 +57,9 @@ def check_corpus(root: Path, config: BookConfig | None = None) -> CheckResult:
 
     duplicates = {t: paths for t, paths in titles.items() if len(paths) > 1}
 
-    return CheckResult(tier=tier, chapters=chapters, duplicate_titles=duplicates, missing_images=missing)
+    return CheckResult(
+        tier=tier, chapters=chapters, duplicate_titles=duplicates, missing_images=missing
+    )
 
 
 def format_report(root: Path, result: CheckResult) -> str:
@@ -74,11 +76,13 @@ def format_report(root: Path, result: CheckResult) -> str:
 
     if result.duplicate_titles:
         lines.append("")
-        lines.append(f"⚠️  같은 제목을 쓰는 챕터 {len(result.duplicate_titles)}건 "
-                      "(빌드 시 id에 -2, -3... 자동 부여됨):")
+        lines.append(
+            f"⚠️  같은 제목을 쓰는 챕터 {len(result.duplicate_titles)}건 "
+            "(빌드 시 id에 -2, -3... 자동 부여됨):"
+        )
         for title, paths in result.duplicate_titles.items():
             rels = ", ".join(str(p.relative_to(root)) for p in paths)
-            lines.append(f"   - \"{title}\": {rels}")
+            lines.append(f'   - "{title}": {rels}')
 
     if result.missing_images:
         lines.append("")
@@ -88,7 +92,7 @@ def format_report(root: Path, result: CheckResult) -> str:
                 rel = abs_path.relative_to(root)
             except ValueError:
                 rel = abs_path
-            lines.append(f"   - {rel}  (참조: \"{src}\")")
+            lines.append(f'   - {rel}  (참조: "{src}")')
 
     if not result.duplicate_titles and not result.missing_images:
         lines.append("")
@@ -118,11 +122,17 @@ def check_environment(config: BookConfig | None = None) -> list[EnvCheckItem]:
     return [
         _check_playwright_chromium(),
         _check_module("PDF 병합 (pypdf)", "pypdf", 'pip install "mdbook-binder[pdf]"'),
-        _check_module("PDF 임포트 컬럼/표 인식 (pdfplumber)", "pdfplumber", 'pip install "mdbook-binder[pdf]"'),
+        _check_module(
+            "PDF 임포트 컬럼/표 인식 (pdfplumber)", "pdfplumber", 'pip install "mdbook-binder[pdf]"'
+        ),
         _check_module("웹 에디터 (Flask)", "flask", 'pip install "mdbook-binder[editor]"'),
         # Pillow는 import의 이미지 추출(pypdf가 내부적으로 요구)과 웹
         # 에디터 양쪽에서 쓰인다 — [pdf]/[editor] 어느 쪽으로 설치해도 된다.
-        _check_module("이미지 처리 (Pillow)", "PIL", 'pip install "mdbook-binder[pdf]" 또는 "mdbook-binder[editor]"'),
+        _check_module(
+            "이미지 처리 (Pillow)",
+            "PIL",
+            'pip install "mdbook-binder[pdf]" 또는 "mdbook-binder[editor]"',
+        ),
         check_ollama(config),
     ]
 

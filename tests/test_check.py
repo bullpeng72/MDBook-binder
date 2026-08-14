@@ -114,7 +114,7 @@ def test_check_ollama_flags_missing_package(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "ollama", None)
     item = check_ollama(None)
     assert not item.installed
-    assert 'mdbook-binder[translate]' in item.install_hint
+    assert "mdbook-binder[translate]" in item.install_hint
 
 
 def test_check_ollama_uses_config_host_on_connection_failure():

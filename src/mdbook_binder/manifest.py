@@ -24,8 +24,16 @@ from pathlib import Path
 import yaml
 
 _ROMAN = {
-    "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5,
-    "VI": 6, "VII": 7, "VIII": 8, "IX": 9, "X": 10,
+    "I": 1,
+    "II": 2,
+    "III": 3,
+    "IV": 4,
+    "V": 5,
+    "VI": 6,
+    "VII": 7,
+    "VIII": 8,
+    "IX": 9,
+    "X": 10,
 }
 
 # 관대한 기본값 — 코퍼스가 명시하지 않아도 흔한 관리용 문서는 자동 제외.
@@ -211,9 +219,11 @@ def _from_explicit_order(root: Path, order: OrderConfig) -> list[ChapterFile] | 
     if order.files:
         result: list[ChapterFile] = []
         for pattern in order.files:
-            matches = sorted(root.glob(pattern), key=_natural_sort_key) if any(
-                ch in pattern for ch in "*?["
-            ) else [root / pattern]
+            matches = (
+                sorted(root.glob(pattern), key=_natural_sort_key)
+                if any(ch in pattern for ch in "*?[")
+                else [root / pattern]
+            )
             for m in matches:
                 if m.exists():
                     result.append(ChapterFile(path=m))
@@ -258,7 +268,9 @@ def _from_toc_manifest(root: Path, manifest_path: Path) -> list[ChapterFile] | N
 
         found = _find_chapter_file(root, part_no, chapter_no)
         if found is None:
-            print(f"  ⚠️  매니페스트 항목에 대응하는 파일 없음: Part {part_no}/Chapter {chapter_no} — 건너뜀")
+            print(
+                f"  ⚠️  매니페스트 항목에 대응하는 파일 없음: Part {part_no}/Chapter {chapter_no} — 건너뜀"
+            )
             continue
         result.append(ChapterFile(path=found, part_label=f"Part {part_no}. {part_title}"))
 
@@ -311,7 +323,9 @@ def _split_front_back(files: list[Path]) -> tuple[list[Path], list[Path]]:
     return front, back
 
 
-def _detect_part_chapter_convention(root: Path, config: BookConfig | None) -> list[ChapterFile] | None:
+def _detect_part_chapter_convention(
+    root: Path, config: BookConfig | None
+) -> list[ChapterFile] | None:
     exclude = config.exclude if config else DEFAULT_EXCLUDE
     part_dirs = [d for d in root.iterdir() if d.is_dir() and _PART_DIR_RE.match(d.name)]
     if not part_dirs:
@@ -321,8 +335,7 @@ def _detect_part_chapter_convention(root: Path, config: BookConfig | None) -> li
         return _ROMAN.get(_PART_DIR_RE.match(d.name).group(1), 99)
 
     top_level = [
-        f for f in sorted(root.glob("*.md"), key=_natural_sort_key)
-        if not _is_excluded(f, exclude)
+        f for f in sorted(root.glob("*.md"), key=_natural_sort_key) if not _is_excluded(f, exclude)
     ]
     front, back = _split_front_back(top_level)
 
@@ -335,7 +348,9 @@ def _detect_part_chapter_convention(root: Path, config: BookConfig | None) -> li
             key=_natural_sort_key,
         )
         for f in chapters:
-            result.append(ChapterFile(path=f, part_label=f"{part_dir.name.split('_')[1]}부. {part_label}"))
+            result.append(
+                ChapterFile(path=f, part_label=f"{part_dir.name.split('_')[1]}부. {part_label}")
+            )
 
     result.extend(ChapterFile(path=f) for f in back)
 
@@ -379,9 +394,7 @@ def resolve_split_targets(root: Path, config: BookConfig | None) -> set[Path]:
 
     result: set[Path] = set()
     for pattern in config.split.files:
-        matches = (
-            root.glob(pattern) if any(ch in pattern for ch in "*?[") else [root / pattern]
-        )
+        matches = root.glob(pattern) if any(ch in pattern for ch in "*?[") else [root / pattern]
         for m in matches:
             if m.exists():
                 result.add(m.resolve())

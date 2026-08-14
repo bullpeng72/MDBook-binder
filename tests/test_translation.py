@@ -123,7 +123,10 @@ class TestTranslateChapter:
         progress: list[tuple[int, int]] = []
 
         translate_chapter(
-            text, chunk_chars=100, translate_fn=lambda s: s, on_chunk_start=lambda j, n: progress.append((j, n))
+            text,
+            chunk_chars=100,
+            translate_fn=lambda s: s,
+            on_chunk_start=lambda j, n: progress.append((j, n)),
         )
 
         assert progress == [(1, 3), (2, 3), (3, 3)]
@@ -141,7 +144,9 @@ class TestTranslateChapter:
             calls.append(chunk)
             return chunk if len(calls) == 1 else "Translated result."
 
-        out = translate_chapter("한글 원문입니다.", chunk_chars=100, translate_fn=fake, target_language="en")
+        out = translate_chapter(
+            "한글 원문입니다.", chunk_chars=100, translate_fn=fake, target_language="en"
+        )
 
         assert len(calls) == 2  # 첫 시도 실패 → 1회 재시도로 성공
         assert out == "Translated result."
@@ -152,22 +157,27 @@ class TestTranslateChapter:
         incomplete: list[tuple[int, int]] = []
 
         out = translate_chapter(
-            "한글 원문입니다.", chunk_chars=100,
+            "한글 원문입니다.",
+            chunk_chars=100,
             translate_fn=lambda s: calls.append(s) or s,  # 항상 원문 그대로(번역 실패 시뮬레이션)
-            target_language="en", max_retries=2,
+            target_language="en",
+            max_retries=2,
             on_incomplete=lambda j, n: incomplete.append((j, n)),
         )
 
         assert len(calls) == 3  # 최초 시도 1 + 재시도 2
         assert incomplete == [(1, 1)]
-        assert out == "한글 원문입니다."  # 실패해도 마지막 결과는 그대로 반환(빈 문자열로 날리지 않음)
+        assert (
+            out == "한글 원문입니다."
+        )  # 실패해도 마지막 결과는 그대로 반환(빈 문자열로 날리지 않음)
 
     def test_e2k_does_not_verify_or_retry(self):
         """target_language='ko'(e2k)는 영문 잔존을 검증하지 않는다 — 정상적인
         영문 고유명사와 번역 실패를 구분할 신호가 없으므로 검증 자체를 건너뛴다."""
         calls: list[str] = []
         out = translate_chapter(
-            "some english text", chunk_chars=100,
+            "some english text",
+            chunk_chars=100,
             translate_fn=lambda s: calls.append(s) or s,
             target_language="ko",
         )
@@ -181,7 +191,8 @@ class TestTranslateChapter:
         translated = "This chapter explains the Harness Method in detail. " * 10 + "(하네스)"
 
         out = translate_chapter(
-            "원문", chunk_chars=1000,
+            "원문",
+            chunk_chars=1000,
             translate_fn=lambda s: calls.append(s) or translated,
             target_language="en",
         )
@@ -258,7 +269,13 @@ class TestTranslateCorpus:
         out_dir = tmp_path / "out"
         _write(root, "chapter.md", "한글 원문입니다.\n")
 
-        translate_corpus(root, out_dir, config=None, target_language="en", translate_fn=lambda s: "Clean translation.")
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: "Clean translation.",
+        )
 
         out = capsys.readouterr().out
         assert "재시도" not in out
@@ -293,8 +310,12 @@ class TestTranslateCorpus:
         calls: list[str] = []
 
         translate_corpus(
-            root, out_dir, config=None, target_language="en",
-            translate_fn=lambda s: calls.append(s) or s, chunk_chars=1000,
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: calls.append(s) or s,
+            chunk_chars=1000,
         )
 
         assert len(calls) == 1  # chunk_chars=1000이면 두 단락이 한 청크로 합쳐짐
@@ -308,7 +329,9 @@ def test_build_prompt_instructs_markdown_preservation_and_includes_chunk():
 
 class TestResolveModelName:
     def test_exact_match_preferred(self):
-        assert resolve_model_name("qwen3.6:35b", ["qwen3.6:35b", "qwen3.6:35b-mlx"]) == "qwen3.6:35b"
+        assert (
+            resolve_model_name("qwen3.6:35b", ["qwen3.6:35b", "qwen3.6:35b-mlx"]) == "qwen3.6:35b"
+        )
 
     def test_falls_back_to_base_name_match(self):
         """회귀 대상: check_ollama()는 베이스 이름이 같으면 "설치됨"으로
