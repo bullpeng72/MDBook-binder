@@ -166,7 +166,7 @@ class BookConfig:
         return path.read_text(encoding="utf-8")
 
 
-def write_minimal_book_yaml(path: Path, *, language: str, **extra: str) -> None:
+def write_minimal_book_yaml(path: Path, *, language: str, **extra: object) -> None:
     """language(+선택 필드)만 있는 최소 book.yaml을 쓴다.
 
     pdf_import.py(PDF→코퍼스 추출)와 translation.py(번역된 코퍼스 출력) 둘 다
@@ -332,7 +332,12 @@ def _detect_part_chapter_convention(
         return None
 
     def part_sort_key(d: Path) -> int:
-        return _ROMAN.get(_PART_DIR_RE.match(d.name).group(1), 99)
+        # part_dirs 필터링 단계에서 이미 _PART_DIR_RE에 매치된 이름만 걸러졌으므로
+        # 여기서는 항상 매치된다 — mypy는 그 불변 조건을 함수 경계 너머로
+        # 못 보므로 명시적으로 단언한다.
+        m = _PART_DIR_RE.match(d.name)
+        assert m is not None
+        return _ROMAN.get(m.group(1), 99)
 
     top_level = [
         f for f in sorted(root.glob("*.md"), key=_natural_sort_key) if not _is_excluded(f, exclude)

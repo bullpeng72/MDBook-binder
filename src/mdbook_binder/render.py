@@ -136,11 +136,11 @@ def demote_headings(html: str) -> str:
     h1과 충돌하지 않도록 한 단계씩 낮춘다. 역순 치환으로 이중 치환을 방지한다.
     """
     for level in range(4, 0, -1):
-        html = re.sub(
-            rf"(</?h){level}(\s|>)",
-            lambda m, lv=level: f"{m.group(1)}{lv + 1}{m.group(2)}",
-            html,
-        )
+
+        def _promote(m: re.Match[str], lv: int = level) -> str:
+            return f"{m.group(1)}{lv + 1}{m.group(2)}"
+
+        html = re.sub(rf"(</?h){level}(\s|>)", _promote, html)
     return html
 
 

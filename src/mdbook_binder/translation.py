@@ -206,13 +206,20 @@ def translate_corpus(
 
         text = chap.path.read_text(encoding="utf-8")
         incomplete_chunks: list[int] = []
+
+        def _on_chunk_start(j: int, n: int) -> None:
+            print(f"  청크 {j}/{n} 번역 중...")
+
+        def _on_incomplete(j: int, n: int, _sink: list[int] = incomplete_chunks) -> None:
+            _sink.append(j)
+
         out_text = translate_chapter(
             text,
             effective_chunk_chars,
             translate_fn,
             target_language=target_language,
-            on_chunk_start=lambda j, n: print(f"  청크 {j}/{n} 번역 중..."),
-            on_incomplete=lambda j, n, _sink=incomplete_chunks: _sink.append(j),
+            on_chunk_start=_on_chunk_start,
+            on_incomplete=_on_incomplete,
         )
 
         if incomplete_chunks:
@@ -308,7 +315,9 @@ def make_ollama_translate_fn(cfg: TranslationConfig, target_language: str) -> Ca
     from ollama import Client
 
     client = Client(host=cfg.host, timeout=cfg.timeout)
-    available = [m.model for m in client.list().models]
+    # ollama 클라이언트의 ListResponse.Model.model은 스텁상 str | None이지만
+    # 서버가 실제로 이름 없는 모델을 보고하는 경우는 없다 — None만 걸러낸다.
+    available = [m.model for m in client.list().models if m.model is not None]
     resolved_model = resolve_model_name(cfg.model, available)
     if resolved_model is None:
         available_desc = ", ".join(available) if available else "없음"
@@ -322,6 +331,6 @@ def make_ollama_translate_fn(cfg: TranslationConfig, target_language: str) -> Ca
         response = client.generate(
             model=resolved_model, prompt=_build_prompt(chunk, target_language)
         )
-        return response.response.strip()
+        return (response.response or "").strip()
 
     return _translate

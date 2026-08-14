@@ -196,7 +196,7 @@ def check_ollama(config: BookConfig | None) -> EnvCheckItem:
     # 것과 반드시 같은 규칙(resolve_model_name)을 써야 한다 — 그러지 않으면
     # 여기선 "설치됨"으로 통과시켜놓고 실제 호출은 서버에 없는 이름 그대로
     # 나가 404로 실패하는 불일치가 생긴다(실사용 중 재현된 버그).
-    model_names = [m.model for m in models_resp.models]
+    model_names = [m.model for m in models_resp.models if m.model is not None]
     if resolve_model_name(cfg.model, model_names) is None:
         return EnvCheckItem(feature, False, f"ollama pull {cfg.model}")
 
