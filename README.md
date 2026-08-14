@@ -785,6 +785,14 @@ ruff check src tests
 
 ## 변경이력
 
+### 0.5.1 (2026-08-14) — 편집기 툴바 아이콘 폰트 누락 패키징 버그 수정
+
+- **fix**: `pyproject.toml` 패키지 데이터 글롭(`templates/vendor/*`)이
+  하위 디렉터리를 재귀적으로 잡지 않아, `templates/vendor/fonts/`의
+  Font Awesome 웹폰트(.woff/.woff2)가 wheel/sdist 빌드에서 통째로
+  누락되던 문제 수정 — CSS는 정상 로드되나 폰트 파일이 404가 나면서
+  `edit` 편집기 툴바 아이콘이 빈 사각형(tofu box)으로 보였다
+
 ### 0.5.0 (2026-08-14) — edit 역방향 저장 + PDF 파이프라인 불일치 수정
 
 - **feat**: `edit --export-md` 코퍼스 역방향 내보내기 구현(.md + images/
