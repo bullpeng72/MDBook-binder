@@ -20,6 +20,18 @@ _FENCE_LINE_RE = re.compile(r"^```")
 _BQ_FENCE_LINE_RE = re.compile(r"^> ```")
 _HTML_BLOCK_START = "@@HTML_START@@"
 _HTML_BLOCK_END = "@@HTML_END@@"
+_RAW_H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
+
+
+def extract_raw_h1(text: str) -> str | None:
+    """마크다운 원문(렌더링 전)에서 첫 H1 텍스트를 뽑는다(순수 함수).
+
+    html_book.py/pdf_book.py 둘 다 split 대상 파일이 여러 가상 챕터로
+    쪼개질 때, 쪼개지기 전 원본 파일의 H1을 그 조각들의 공통 Part 라벨로
+    쓰기 위해 이 함수를 공유한다.
+    """
+    m = _RAW_H1_RE.search(text)
+    return m.group(1).strip() if m else None
 
 
 def find_heading_boundaries(text: str, level: int) -> list[int]:

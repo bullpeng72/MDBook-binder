@@ -17,7 +17,8 @@ import tempfile
 from html import escape as _html_escape
 from pathlib import Path
 
-from mdbook_binder.manifest import BookConfig, ChapterFile
+from mdbook_binder.chapter_split import extract_raw_h1, split_chapter_markdown
+from mdbook_binder.manifest import BookConfig, ChapterFile, resolve_split_targets
 from mdbook_binder.mermaid_prerender import mermaid_font_face_css, mermaid_label_css
 from mdbook_binder.render import extract_h1_text, md_to_html, tip_start_pattern
 from mdbook_binder.theme import theme_css
@@ -234,7 +235,9 @@ def _mermaid_chunk_html(chunks: list[tuple[str, int, int]]) -> str:
     return "".join(parts)
 
 
-def _build_pdf_page_html(body_html: str, title: str, custom_css: str = "") -> str:
+def _build_pdf_page_html(
+    body_html: str, title: str, custom_css: str = "", language: str = "ko"
+) -> str:
     css = (_TEMPLATES_DIR / "html_book.css").read_text(encoding="utf-8")
     pdf_css = (_TEMPLATES_DIR / "pdf_override.css").read_text(encoding="utf-8")
     js = (_TEMPLATES_DIR / "pdf_book.js").read_text(encoding="utf-8")
@@ -244,7 +247,7 @@ def _build_pdf_page_html(body_html: str, title: str, custom_css: str = "") -> st
     # 동일한 폰트로 렌더링된다(mermaid_prerender.py의 HTML 경로와 동일 폰트).
     font_css = f"{mermaid_font_face_css()}\n{mermaid_label_css()}"
     return f"""<!DOCTYPE html>
-<html lang="ko">
+<html lang="{_html_escape(language)}">
 <head>
 <meta charset="UTF-8">
 <title>{_html_escape(title)}</title>
@@ -271,20 +274,62 @@ def _build_pdf_page_html(body_html: str, title: str, custom_css: str = "") -> st
 </html>"""
 
 
+def _expand_split_chapters(
+    chapters: list[ChapterFile], root: Path, config: BookConfig | None
+) -> list[tuple[ChapterFile, str]]:
+    """book.yaml의 split 설정에 따라 파일 하나를 여러 (ChapterFile, 마크다운 조각)
+    쌍으로 펼친다.
+
+    html_book.py의 1패스(챕터 렌더링 전 split 펼치기)와 동일한 규칙을 적용해,
+    PDF 빌드도 HTML 빌드와 같은 챕터 경계를 갖게 한다 — import가 만든 단일
+    파일 코퍼스를 build html로 빌드하면 챕터별 사이드바가 생기는데 build pdf는
+    단일 거대 챕터로 나오던 불일치를 없앤다. split 대상이 아니거나 해당
+    레벨 헤딩이 없으면 (원본 ChapterFile, 파일 전체 텍스트) 1쌍 그대로 반환
+    — 기존(파일 1개 = PDF 1개) 동작과 완전히 동일하게 폴백된다.
+    """
+    split_targets = resolve_split_targets(root, config)
+    split_level = config.split.heading_level if config and config.split else 2
+
+    expanded: list[tuple[ChapterFile, str]] = []
+    for chap in chapters:
+        raw = chap.path.read_text(encoding="utf-8")
+        is_split_target = chap.path.resolve() in split_targets
+        pieces = split_chapter_markdown(raw, split_level) if is_split_target else [raw]
+        group_label = extract_raw_h1(raw) if is_split_target and len(pieces) > 1 else None
+        for piece in pieces:
+            piece_chap = ChapterFile(path=chap.path, part_label=group_label or chap.part_label)
+            expanded.append((piece_chap, piece))
+    return expanded
+
+
 async def convert_one(
-    chapter: ChapterFile, browser, tip_pattern, *, out_path: Path, custom_css: str = ""
+    chapter: ChapterFile,
+    raw: str,
+    browser,
+    tip_pattern,
+    *,
+    out_path: Path,
+    custom_css: str = "",
+    language: str = "ko",
 ) -> tuple[Path, str]:
-    """챕터 하나를 PDF로 변환한다. 긴 mermaid 다이어그램은 청크 스크린샷으로 대체 삽입한다.
+    """챕터(조각) 하나를 PDF로 변환한다. 긴 mermaid 다이어그램은 청크 스크린샷으로 대체 삽입한다.
+
+    raw는 렌더링할 마크다운 본문이다 — chapter.path.read_text()를 직접 호출하지
+    않고 호출부(_run_all()/_run_merged())가 넘겨준다: book.yaml의 split 설정으로
+    파일 하나가 여러 조각으로 쪼개질 수 있어(_expand_split_chapters() 참고),
+    "어떤 텍스트를 렌더링할지"와 "그 텍스트가 어느 파일에서 왔는지"(이미지
+    상대경로·파일명 폴백 제목에 필요)를 분리해야 한다.
 
     반환하는 title은 챕터의 실제 h1 제목(없으면 파일명)이다 — PDF 문서 타이틀과
     병합본 북마크(outline) 라벨에 공용으로 쓴다(html_book.py의 제목 추출 규칙과 동일).
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    raw = chapter.path.read_text(encoding="utf-8")
     body = md_to_html(raw, tip_pattern)
     title = extract_h1_text(body) or chapter.path.stem
-    html = _rewrite_img_paths(_build_pdf_page_html(body, title, custom_css), chapter.path.parent)
+    html = _rewrite_img_paths(
+        _build_pdf_page_html(body, title, custom_css, language), chapter.path.parent
+    )
 
     temp_dir = Path(tempfile.mkdtemp(prefix="book_binder_pdf_"))
     try:
@@ -430,37 +475,59 @@ async def convert_one(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     size_kb = out_path.stat().st_size // 1024
-    print(f"  ✅ {chapter.path.name}  ({size_kb} KB)")
+    print(f"  ✅ {out_path.name}  ({size_kb} KB)")
     return out_path, title
 
 
 async def _run_all(
-    chapters: list[ChapterFile], root: Path, pdf_dir: Path, tip_pattern, custom_css: str = ""
-) -> tuple[int, int]:
+    chapters: list[ChapterFile],
+    root: Path,
+    config: BookConfig | None,
+    pdf_dir: Path,
+    tip_pattern,
+    custom_css: str = "",
+    language: str = "ko",
+) -> tuple[int, int, list[Path]]:
     from playwright.async_api import async_playwright
 
+    expanded = _expand_split_chapters(chapters, root, config)
+
     ok = fail = 0
+    out_paths: list[Path] = []
+    # 같은 원본 파일이 split으로 여러 조각이 되면 파일명이 겹친다 — html_book.py의
+    # _dedupe_slug()와 같은 방식으로 두 번째 조각부터 "-2", "-3"을 붙인다.
+    seen_stems: dict[Path, int] = {}
     async with async_playwright() as pw:
         browser = await _launch_chromium(pw)
         if browser is None:
-            return 0, len(chapters)
-        for chapter in chapters:
+            return 0, len(expanded), []
+        for chapter, raw in expanded:
             rel = chapter.path.relative_to(root)
-            out_path = pdf_dir / rel.with_suffix(".pdf")
+            count = seen_stems.get(rel, 0)
+            seen_stems[rel] = count + 1
+            suffix = "" if count == 0 else f"-{count + 1}"
+            out_path = pdf_dir / rel.parent / f"{rel.stem}{suffix}.pdf"
             try:
                 await convert_one(
-                    chapter, browser, tip_pattern, out_path=out_path, custom_css=custom_css
+                    chapter,
+                    raw,
+                    browser,
+                    tip_pattern,
+                    out_path=out_path,
+                    custom_css=custom_css,
+                    language=language,
                 )
                 ok += 1
+                out_paths.append(out_path)
             except Exception as exc:
                 # 여러 챕터 결과가 한 줄씩 나열되는 목록이라, 예외가 여러 줄이면
                 # 목록 형태가 깨진다 — 첫 줄만 보여준다.
                 detail = str(exc).strip().splitlines()
                 summary = detail[0] if detail else type(exc).__name__
-                print(f"  ❌ {rel}: {summary}")
+                print(f"  ❌ {rel}{suffix}: {summary}")
                 fail += 1
         await browser.close()
-    return ok, fail
+    return ok, fail, out_paths
 
 
 def _add_merge_outline(writer, entries: list[tuple[ChapterFile, str, int]]) -> None:
@@ -489,10 +556,19 @@ def _add_merge_outline(writer, entries: list[tuple[ChapterFile, str, int]]) -> N
 
 
 async def _run_merged(
-    chapters: list[ChapterFile], out_path: Path, tip_pattern, custom_css: str = ""
+    chapters: list[ChapterFile],
+    root: Path,
+    config: BookConfig | None,
+    out_path: Path,
+    tip_pattern,
+    custom_css: str = "",
+    language: str = "ko",
+    title: str | None = None,
 ) -> bool:
     import pypdf
     from playwright.async_api import async_playwright
+
+    expanded = _expand_split_chapters(chapters, root, config)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="book_binder_merge_"))
@@ -501,24 +577,35 @@ async def _run_merged(
             browser = await _launch_chromium(pw)
             if browser is None:
                 return False
-            parts: list[tuple[Path, str]] = []
+            parts: list[tuple[ChapterFile, Path, str]] = []
             try:
-                for idx, chapter in enumerate(chapters):
+                for idx, (chapter, raw) in enumerate(expanded):
                     part_out = temp_dir / f"{idx:03d}.pdf"
-                    _, title = await convert_one(
-                        chapter, browser, tip_pattern, out_path=part_out, custom_css=custom_css
+                    _, chapter_title = await convert_one(
+                        chapter,
+                        raw,
+                        browser,
+                        tip_pattern,
+                        out_path=part_out,
+                        custom_css=custom_css,
+                        language=language,
                     )
-                    parts.append((part_out, title))
+                    parts.append((chapter, part_out, chapter_title))
             finally:
                 await browser.close()
 
         writer = pypdf.PdfWriter()
         outline_entries: list[tuple[ChapterFile, str, int]] = []
-        for chapter, (part_path, title) in zip(chapters, parts):
+        for chapter, part_path, chapter_title in parts:
             start = len(writer.pages)
             writer.append(str(part_path))
-            outline_entries.append((chapter, title, len(writer.pages) - start))
+            outline_entries.append((chapter, chapter_title, len(writer.pages) - start))
         _add_merge_outline(writer, outline_entries)
+        if title:
+            # 병합본은 단일 파일 하나로 나오는 유일한 산출물이라 여기서만
+            # 문서 제목을 의미 있게 붙일 수 있다(개별 모드는 챕터마다 자기
+            # 실제 h1 제목을 쓰는 게 맞아 book 제목으로 덮어쓰지 않는다).
+            writer.add_metadata({"/Title": title})
         with open(out_path, "wb") as f:
             writer.write(f)
         writer.close()
@@ -526,7 +613,7 @@ async def _run_merged(
         shutil.rmtree(temp_dir, ignore_errors=True)
 
     size_kb = out_path.stat().st_size // 1024
-    print(f"  ✅ {out_path.name}  ({len(chapters)}개 파일 병합, {size_kb} KB)")
+    print(f"  ✅ {out_path.name}  ({len(parts)}개 챕터 병합, {size_kb} KB)")
     return True
 
 
@@ -548,6 +635,8 @@ def build_pdf(
     merge_name: str | None = None,
     out_dir: Path | None = None,
     color_override: str | None = None,
+    title_override: str | None = None,
+    language_override: str | None = None,
 ) -> Path | list[Path]:
     """ROOT의 마크다운 코퍼스를 PDF로 빌드한다.
 
@@ -555,6 +644,12 @@ def build_pdf(
     PDF(out_dir 아래 디렉토리 구조 그대로)를 만든다. 순서 해석은
     manifest.resolve()의 3단계 우선순위를 html_book.build_html()과 동일하게
     공유한다.
+
+    title_override(또는 config.title)는 병합(--merge) 모드에서만 PDF 문서
+    메타데이터 제목으로 쓰인다 — 개별 모드는 챕터마다 자기 h1 제목을 쓰는
+    게 맞아 book 제목으로 덮어쓰지 않는다. language_override(또는
+    config.language)는 각 페이지의 `<html lang>` 속성에 반영된다
+    (html_book.build_html()과 동일한 기본값 우선순위: override → book.yaml → "ko").
     """
     from mdbook_binder.manifest import resolve
 
@@ -570,19 +665,25 @@ def build_pdf(
     color = color_override or (config.color if config else None)
     if color:
         custom_css = f"{theme_css(color)}\n\n{custom_css}"
+    language = language_override or (config.language if config else "ko")
     pdf_dir = out_dir or (root / "pdf")
 
     if merge_name is not None:
+        title = title_override or (config.title if config else None) or root.name
         out_path = pdf_dir / f"{merge_name}.pdf"
         print(f"\U0001f4c4 병합 대상: {len(chapters)}개 파일 → {out_path}")
-        ok = asyncio.run(_run_merged(chapters, out_path, tip_pattern, custom_css))
+        ok = asyncio.run(
+            _run_merged(chapters, root, config, out_path, tip_pattern, custom_css, language, title)
+        )
         if not ok:
             raise RuntimeError("PDF 병합 실패")
         return out_path
 
     print(f"\U0001f4c4 변환 대상: {len(chapters)}개 파일 → {pdf_dir}")
-    ok_n, fail_n = asyncio.run(_run_all(chapters, root, pdf_dir, tip_pattern, custom_css))
+    ok_n, fail_n, out_paths = asyncio.run(
+        _run_all(chapters, root, config, pdf_dir, tip_pattern, custom_css, language)
+    )
     print(f"완료: {ok_n}개 성공 / {fail_n}개 실패")
     if fail_n:
         raise RuntimeError(f"{fail_n}개 챕터 PDF 변환 실패")
-    return [pdf_dir / c.path.relative_to(root).with_suffix(".pdf") for c in chapters]
+    return out_paths

@@ -16,6 +16,7 @@ import pypdf
 from mdbook_binder.manifest import ChapterFile
 from mdbook_binder.pdf_book import (
     _add_merge_outline,
+    _build_pdf_page_html,
     _chunk_boundaries,
     _is_occupied,
     _merge_bands,
@@ -220,3 +221,19 @@ class TestAddMergeOutline:
             ("ch1", 1, 1),
             ("맺음말", 0, 3),
         ]
+
+
+class TestBuildPdfPageHtml:
+    def test_language_reflected_in_html_lang_attribute(self):
+        """--language(book.yaml language)가 각 페이지의 <html lang>에
+        반영돼야 한다 — 예전엔 "ko"로 하드코딩돼 있었다(회귀 재현)."""
+        html = _build_pdf_page_html("<p>body</p>", "Title", language="en")
+        assert '<html lang="en">' in html
+
+    def test_default_language_is_korean(self):
+        html = _build_pdf_page_html("<p>body</p>", "Title")
+        assert '<html lang="ko">' in html
+
+    def test_title_is_html_escaped(self):
+        html = _build_pdf_page_html("<p>body</p>", "A & B", language="en")
+        assert "<title>A &amp; B</title>" in html

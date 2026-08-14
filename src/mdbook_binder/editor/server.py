@@ -18,7 +18,7 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_file, send_from_directory
 
-from mdbook_binder.editor.html_editor import BookHTMLEditor
+from mdbook_binder.editor.html_editor import BookHTMLEditor, export_markdown_corpus
 from mdbook_binder.editor.image_editor import ImageEditor
 from mdbook_binder.mermaid_prerender import mermaid_font_face_css, mermaid_label_css
 
@@ -32,8 +32,14 @@ _INDEX_TEMPLATE = _TEMPLATE_DIR / "index.html"
 _VENDOR_DIR = _TEMPLATE_DIR.parent / "vendor"
 
 
-def create_app(html_path: str, output_path: str | None = None) -> Flask:
-    """편집 중인 HTML_PATH에 대한 Flask 앱을 만든다."""
+def create_app(
+    html_path: str, output_path: str | None = None, export_md_dir: str | None = None
+) -> Flask:
+    """편집 중인 HTML_PATH에 대한 Flask 앱을 만든다.
+
+    export_md_dir가 주어지면 /api/save가 HTML 저장에 더해 그 디렉터리에
+    마크다운 코퍼스도 함께 내보낸다(BookHTMLEditor.export_markdown() 참고).
+    """
     app = Flask(
         __name__,
         template_folder=str(_TEMPLATE_DIR),
@@ -419,7 +425,17 @@ def create_app(html_path: str, output_path: str | None = None) -> Flask:
             image_editor.soup = updated_soup
             saved_path = image_editor.save_changes(output_path)
 
-            return jsonify({"success": True, "path": saved_path})
+            exported_md: list[str] = []
+            if export_md_dir:
+                # image_editor.soup은 save_changes()가 이미지/다이어그램 삭제·
+                # 교체까지 적용한 뒤의 최종 상태다 — html_editor.export_markdown()
+                # (html_editor 쪽 변경만 반영)이 아니라 이걸 넘겨야 저장된 HTML과
+                # 내보낸 코퍼스가 어긋나지 않는다.
+                exported_md = [
+                    str(p) for p in export_markdown_corpus(image_editor.soup, Path(export_md_dir))
+                ]
+
+            return jsonify({"success": True, "path": saved_path, "exported_md": exported_md})
         except Exception as exc:
             logger.error(f"api_save error: {exc}")
             return jsonify({"error": str(exc)}), 500
@@ -468,10 +484,14 @@ def _encode_image_thumbnail(path: str, max_size: int = 200) -> str:
 
 
 def run_editor(
-    html_path: str, output_path: str | None = None, port: int = 5757, open_browser: bool = True
+    html_path: str,
+    output_path: str | None = None,
+    port: int = 5757,
+    open_browser: bool = True,
+    export_md_dir: str | None = None,
 ) -> None:
     """편집 서버를 기동하고(옵션) 브라우저를 연다."""
-    app = create_app(html_path, output_path)
+    app = create_app(html_path, output_path, export_md_dir=export_md_dir)
 
     if open_browser:
         import webbrowser
@@ -488,6 +508,8 @@ def run_editor(
     print(f"   URL   : http://localhost:{port}")
     print(f"   파일  : {Path(html_path).name}")
     print(f"   저장  : {output_path or Path(html_path).stem + '_edited.html'}")
+    if export_md_dir:
+        print(f"   내보내기: 저장할 때마다 {export_md_dir}에 마크다운 코퍼스도 갱신됨")
     print("\n   종료  : 브라우저에서 '종료' 버튼 클릭, 또는 Ctrl+C\n")
 
     app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False)

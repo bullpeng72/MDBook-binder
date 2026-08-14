@@ -19,7 +19,11 @@ from mdbook_binder.mermaid_wrap import auto_wrap_long_labels
 # HTML 렌더링 전 마크다운 파서로부터 블록을 보호하는 경계가 동일해야 한다.
 HTML_BLOCK_RE = re.compile(r"@@HTML_START@@\s*\n(.*?)@@HTML_END@@", re.DOTALL)
 MERMAID_FENCE_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
-BQ_CODE_FENCE_RE = re.compile(r"^> ```(\w*)\n(.*?)^> ```\s*$", re.MULTILINE | re.DOTALL)
+# 닫는 펜스 뒤를 [ \t]*(줄 안 공백만)로 끊는다 — DOTALL에서 \s는 개행도 먹으므로
+# \s*$였을 때 블록 뒤의 빈 줄(다음 문단과의 구분선)까지 집어삼켜, 치환 후
+# "@@BLOCK_n@@\n\n다음 문단"이 "@@BLOCK_n@@\n다음 문단"으로 줄어들었다 — markdown
+# 파서가 둘을 별개 <p>가 아니라 <br>로 이어붙인 한 문단으로 오인하는 회귀였다.
+BQ_CODE_FENCE_RE = re.compile(r"^> ```(\w*)\n(.*?)^> ```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
 def tip_start_pattern(markers: list[str]) -> re.Pattern:

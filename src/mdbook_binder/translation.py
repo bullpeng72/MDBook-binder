@@ -186,10 +186,18 @@ def translate_corpus(
     translate_fn: Callable[[str], str],
     *,
     chunk_chars: int | None = None,
+    resume: bool = False,
 ) -> Path:
     """manifest.resolve()로 걷은 챕터를 순서대로 번역해 out_dir에 동일한
     디렉토리 구조로 미러링하고, book.yaml의 language를 target_language로
     재작성한다(book.yaml이 없던 코퍼스면 최소 book.yaml을 새로 만든다).
+
+    resume=True면 out_dir에 이미 결과 파일이 있는 챕터는 건너뛴다 — 대용량
+    코퍼스 번역 중 네트워크/타임아웃으로 중간에 실패했을 때, 같은 명령을
+    `--resume`으로 다시 실행하면 이미 끝난 챕터를 재번역하지 않고 이어서
+    진행할 수 있다. 챕터(파일) 단위로만 판단한다 — 청크 단위 부분 진행은
+    추적하지 않으므로, 챕터 하나가 절반만 번역된 채 중단됐다면 그 챕터는
+    (아직 out_dir에 파일이 없으므로) 처음부터 다시 번역된다.
     """
     effective_chunk_chars = chunk_chars or (
         config.translation.chunk_chars
@@ -202,6 +210,12 @@ def translate_corpus(
     incomplete_chapters: list[str] = []
     for i, chap in enumerate(chapters, start=1):
         rel = chap.path.relative_to(root)
+        dest = out_dir / rel
+
+        if resume and dest.exists():
+            print(f"⏭️  [{i}/{total}] {rel} — 이미 번역됨, 건너뜀")
+            continue
+
         print(f"\U0001f4c4 [{i}/{total}] {rel}")
 
         text = chap.path.read_text(encoding="utf-8")
@@ -226,7 +240,6 @@ def translate_corpus(
             print(f"  ⚠️  재시도 후에도 한글이 남은 청크: {incomplete_chunks} — 수동 확인 필요")
             incomplete_chapters.append(f"{rel} (청크 {incomplete_chunks})")
 
-        dest = out_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(out_text, encoding="utf-8")
 

@@ -104,9 +104,16 @@ def test_build_html_rejects_unknown_color(tmp_path: Path):
 def test_build_pdf_passes_merge_and_out_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
-    def fake_build_pdf(root, *, merge_name, out_dir, color_override):
+    def fake_build_pdf(
+        root, *, merge_name, out_dir, color_override, title_override, language_override
+    ):
         captured.update(
-            root=root, merge_name=merge_name, out_dir=out_dir, color_override=color_override
+            root=root,
+            merge_name=merge_name,
+            out_dir=out_dir,
+            color_override=color_override,
+            title_override=title_override,
+            language_override=language_override,
         )
 
     monkeypatch.setattr("mdbook_binder.pdf_book.build_pdf", fake_build_pdf)
@@ -120,12 +127,45 @@ def test_build_pdf_passes_merge_and_out_dir(tmp_path: Path, monkeypatch: pytest.
     assert result.exit_code == 0, result.output
     assert captured["merge_name"] == "my_book"
     assert captured["out_dir"] == tmp_path / "dist"
+    assert captured["title_override"] is None
+    assert captured["language_override"] is None
+
+
+def test_build_pdf_passes_title_and_language(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    def fake_build_pdf(
+        root, *, merge_name, out_dir, color_override, title_override, language_override
+    ):
+        captured.update(title_override=title_override, language_override=language_override)
+
+    monkeypatch.setattr("mdbook_binder.pdf_book.build_pdf", fake_build_pdf)
+    _write(tmp_path, "chapter.md", "# 챕터\n")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "build",
+            "pdf",
+            str(tmp_path),
+            "--title",
+            "My Book",
+            "--language",
+            "en",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["title_override"] == "My Book"
+    assert captured["language_override"] == "en"
 
 
 def test_build_pdf_wraps_runtime_error_as_click_exception(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    def fake_build_pdf(root, *, merge_name, out_dir, color_override):
+    def fake_build_pdf(
+        root, *, merge_name, out_dir, color_override, title_override, language_override
+    ):
         raise RuntimeError("Playwright Chromium 없음")
 
     monkeypatch.setattr("mdbook_binder.pdf_book.build_pdf", fake_build_pdf)
@@ -143,9 +183,13 @@ def test_build_pdf_wraps_runtime_error_as_click_exception(
 def test_edit_passes_options_to_run_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     captured = {}
 
-    def fake_run_editor(html_path, *, output_path, port, open_browser):
+    def fake_run_editor(html_path, *, output_path, port, open_browser, export_md_dir):
         captured.update(
-            html_path=html_path, output_path=output_path, port=port, open_browser=open_browser
+            html_path=html_path,
+            output_path=output_path,
+            port=port,
+            open_browser=open_browser,
+            export_md_dir=export_md_dir,
         )
 
     monkeypatch.setattr("mdbook_binder.editor.server.run_editor", fake_run_editor)
@@ -168,6 +212,26 @@ def test_edit_passes_options_to_run_editor(tmp_path: Path, monkeypatch: pytest.M
     assert captured["port"] == 9999
     assert captured["open_browser"] is False
     assert captured["output_path"] == str(tmp_path / "final.html")
+    assert captured["export_md_dir"] is None
+
+
+def test_edit_passes_export_md_dir_to_run_editor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    captured = {}
+
+    def fake_run_editor(html_path, *, output_path, port, open_browser, export_md_dir):
+        captured["export_md_dir"] = export_md_dir
+
+    monkeypatch.setattr("mdbook_binder.editor.server.run_editor", fake_run_editor)
+    html_file = _write(tmp_path, "book.html", "<html></html>")
+    corpus_dir = tmp_path / "corpus_out"
+
+    result = CliRunner().invoke(
+        main,
+        ["edit", str(html_file), "--no-browser", "--export-md", str(corpus_dir)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["export_md_dir"] == str(corpus_dir)
 
 
 # ── import ─────────────────────────────────────────────────────────────
@@ -309,9 +373,15 @@ def test_translate_passes_direction_and_chunk_chars_override(
     )
     captured = {}
 
-    def fake_translate_corpus(root, out_dir, config, target_language, translate_fn, *, chunk_chars):
+    def fake_translate_corpus(
+        root, out_dir, config, target_language, translate_fn, *, chunk_chars, resume
+    ):
         captured.update(
-            root=root, out_dir=out_dir, target_language=target_language, chunk_chars=chunk_chars
+            root=root,
+            out_dir=out_dir,
+            target_language=target_language,
+            chunk_chars=chunk_chars,
+            resume=resume,
         )
 
     monkeypatch.setattr("mdbook_binder.translation.translate_corpus", fake_translate_corpus)
@@ -333,3 +403,32 @@ def test_translate_passes_direction_and_chunk_chars_override(
     assert result.exit_code == 0, result.output
     assert captured["target_language"] == "en"
     assert captured["chunk_chars"] == 500
+    assert captured["resume"] is False
+
+
+def test_translate_passes_resume_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from mdbook_binder.check import EnvCheckItem
+
+    monkeypatch.setattr(
+        "mdbook_binder.check.check_ollama", lambda config: EnvCheckItem("번역 (Ollama)", True)
+    )
+    monkeypatch.setattr(
+        "mdbook_binder.translation.make_ollama_translate_fn", lambda cfg, target: lambda text: text
+    )
+    captured = {}
+
+    def fake_translate_corpus(
+        root, out_dir, config, target_language, translate_fn, *, chunk_chars, resume
+    ):
+        captured["resume"] = resume
+
+    monkeypatch.setattr("mdbook_binder.translation.translate_corpus", fake_translate_corpus)
+    _write(tmp_path, "chapter.md", "# 챕터\n")
+
+    result = CliRunner().invoke(
+        main,
+        ["translate", str(tmp_path), str(tmp_path / "out"), "--direction", "e2k", "--resume"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["resume"] is True

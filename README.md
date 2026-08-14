@@ -70,7 +70,9 @@ flowchart TD
     C --> E["pdf_book.py\nPlaywright 청크 캡처\n개별 PDF / --merge 단권"]
     D --> F["editor/\nLectureHTMLEditor·ImageEditor 포크\n(lecture-forge 비의존)"]
     G["check.py\n빌드 전 사전 점검"] -.-> B
-    D -.book.yaml split 설정 시.-> H["chapter_split.py\nH2 경계로 파일 하나를\n여러 가상 챕터로 분할"]
+    D -.book_yaml split 설정 시.-> H["chapter_split.py\nH2 경계로 파일 하나를\n여러 가상 챕터로 분할"]
+    E -.book_yaml split 설정 시.-> H
+    F -.edit --export-md 코퍼스로 내보내기 일부 손실.-> A
 
     style D fill:#4527a0,color:#fff
     style E fill:#00897b,color:#fff
@@ -123,7 +125,7 @@ MDBook-binder/
 │   ├── check.py              # 빌드 전 사전 점검
 │   ├── cli.py                # mdbook-binder CLI (check/build/edit/import/translate)
 │   ├── editor/                # Lecture_forge 포크 — lecture-forge 비의존
-│   │   ├── html_editor.py      # BookHTMLEditor — 섹션 CRUD, 이미지 추가(base64 임베드)
+│   │   ├── html_editor.py      # BookHTMLEditor — 섹션 CRUD, 이미지 추가(base64 임베드), 마크다운 코퍼스 역방향 내보내기
 │   │   ├── image_editor.py     # 이미지/다이어그램 편집, 이미지 교체(base64 임베드)
 │   │   └── server.py           # Flask 편집 API 서버
 │   └── templates/
@@ -133,18 +135,18 @@ MDBook-binder/
 │       ├── vendor/              # 번들: mermaid.min.js·Noto Sans KR 폰트·Tailwind·EasyMDE·Font Awesome·marked.js(오프라인용)
 │       └── editor/              # 편집 SPA (index.html/editor.css/editor.js)
 └── tests/
-    ├── test_cli.py               # CLI 옵션 배선·에러 메시지 (14건)
+    ├── test_cli.py               # CLI 옵션 배선·에러 메시지 (17건)
     ├── test_manifest.py          # 3단계 순서 해석 + split 설정 파싱/해석 (20건)
     ├── test_chapter_split.py     # H2 경계 탐지·분할(펜스/raw HTML/blockquote 보호) (9건)
     ├── test_html_book.py         # 섹션 id 충돌 회피·이미지 임베드·챕터 간 링크 재작성·가상 분할 (18건)
     ├── test_check.py             # 사전 점검 + 설치 환경 점검 (13건)
-    ├── test_editor.py            # 이미지 추가/교체 후 base64 임베드 (2건)
+    ├── test_editor.py            # 이미지 추가/교체 후 base64 임베드 + 코퍼스 역방향 내보내기 + 저장 왕복 충실도 (14건)
     ├── test_mermaid_prerender.py # Mermaid 사전 렌더링 성공/폴백 (6건)
     ├── test_mermaid_wrap.py      # 라벨 자동 줄바꿈 (12건)
     ├── test_theme.py             # 색상 테마 프리셋 + book.yaml/--color 연동 (8건)
-    ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 (20건)
+    ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 + 페이지 HTML 템플릿 (23건)
     ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 + 폰트 크기 기반 헤딩 감지 (85건)
-    ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭·k2e 재시도 (38건)
+    ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭·k2e 재시도·resume (41건)
     └── test_server.py            # 웹 에디터 Flask API (12건)
 ```
 
@@ -314,12 +316,6 @@ pip/pipx로 설치된 별도 CLI이며 이 저장소 안에는 없다). 챕터�
    규칙을 따르거나, book.yaml의 order.files로 순서를 직접 명시한다.
 ```
 
-두 방식 모두 규칙 본문이 이 README와 두 곳(스킬 파일, 프롬프트 블록)에
-중복된다 — README의 [마크다운 저작 규칙](#마크다운-저작-규칙)이 바뀌면
-`.claude/skills/mdbook-authoring/SKILL.md`와 위 프롬프트 블록도 함께
-갱신해야 한다. "README만 고치면 된다"는 이전 설명은 코퍼스 저장소에
-README가 없다는 사실과 맞지 않아 폐기했다.
-
 ### 빌드 전 사전 점검 — check
 
 실제로 HTML을 렌더링하지 않고 원본 마크다운만 훑어 빠르게 확인한다 — 챕터가
@@ -394,6 +390,7 @@ mdbook-binder build pdf <코퍼스_루트>                        # 챕터별 �
 mdbook-binder build pdf <코퍼스_루트> --merge [이름]          # 단권으로 병합
 mdbook-binder build pdf <코퍼스_루트> --out-dir <디렉토리>     # 출력 위치 지정
 mdbook-binder build pdf <코퍼스_루트> --color green           # 색상 테마 지정(HTML과 동일한 프리셋)
+mdbook-binder build pdf <코퍼스_루트> --merge --title "..." --language en  # 병합본 제목/언어 지정
 ```
 
 각 챕터를 Playwright/Chromium으로 독립 렌더링한다. 긴 Mermaid 다이어그램은
@@ -405,16 +402,28 @@ mdbook-binder build pdf <코퍼스_루트> --color green           # 색상 테�
 폰트 크기·다이어그램 해상도가 항상 동일하다. 병합본에는 챕터별 북마크가
 자동으로 붙고, Part가 있는 코퍼스는 Part 제목 아래 챕터들이 중첩된
 아웃라인으로 구성돼 PDF 뷰어 사이드바에서 바로 챕터로 이동할 수 있다.
+`--title`(기본: `book.yaml`의 `title`/디렉토리명)은 병합본의 PDF 문서
+메타데이터 제목에 반영된다 — 개별 모드는 챕터마다 자기 h1 제목을 쓰는
+게 맞아 영향받지 않는다. `--language`(기본: `book.yaml`의 `language`
+또는 `ko`)는 모든 페이지의 `<html lang>` 속성에 반영된다.
 
 ### HTML 편집
 
 ```bash
-mdbook-binder edit <html_경로> [--port 5757] [--out edited.html] [--no-browser]
+mdbook-binder edit <html_경로> [--port 5757] [--out edited.html] [--no-browser] [--export-md <디렉토리>]
 ```
 
 브라우저에서 섹션 단위로 마크다운 편집(EasyMDE), 이미지/다이어그램 목록·삭제·
 교체, 이미지 업로드/갤러리를 제공한다. `<section id="{slug}">` 구조에만
 의존하므로 어떤 코퍼스로 만든 HTML이든 동일하게 동작한다.
+
+`--export-md <디렉토리>`를 주면 브라우저에서 "저장"할 때마다 HTML뿐 아니라
+편집 결과를 챕터별 `.md` + `images/` + `book.yaml`로도 내보낸다(코퍼스
+역반영) — 지금까지 편집 결과가 HTML 파일에서 끝나 `translate`/`build`로
+재사용하려면 원본 코퍼스를 손으로 고쳐야 했던 것을 해소한다. 다만
+완전한 역방향 변환은 아니다 — [알려진 한계](#알려진-한계)에 정리된
+Mermaid 원본 소스·콜아웃 마커·챕터 간 상대경로 링크는 빌드 시점에
+이미 사라져 있어 복원되지 않는다.
 
 ### PDF 임포트 — import
 
@@ -451,16 +460,19 @@ docx 등 다른 포맷 문서는 PDF로 변환(워드프로세서의 "PDF로 저
   자동으로 제외한다.
 - **챕터 제목 후보를 폰트 크기로 자동 감지한다.** 문서 앞부분 표본으로
   본문 폰트 크기의 최빈값을 구하고, 그보다 눈에 띄게(기본 1.15배 이상)
-  큰 짧은 단독 줄을 챕터/절 제목으로 보고 `## ` 마커를 붙인다. 하나라도
-  감지되면 `book.yaml`에 `split: {files: [<파일명>], heading_level: 2}`를
-  자동으로 써서, 바로 이어서 `build html`만 돌려도 [가상
+  크면서도 본문 대비 드물게 등장하는(강조 문단 등 "또 다른 본문
+  스타일"과 구분) 짧고 고립된 줄(위아래 줄 간격이 충분히 넓은 줄)을
+  챕터/절 제목으로 보고 `## ` 마커를 붙인다. 감지된 헤딩 비율이 비정상적
+  으로 높으면(전체 줄의 5% 초과) 안전장치로 자동 감지 자체를 무효화한다.
+  하나라도 감지되면 `book.yaml`에 `split: {files: [<파일명>], heading_level:
+  2}`를 자동으로 써서, 바로 이어서 `build html`/`build pdf` 둘 다 추가
+  조치 없이 [가상
   분할](#import-결과물을-챕터별로-분리하기--사이드바-챕터-링크-만들기)이
-  적용돼 사이드바가 챕터별로 나뉜다. 폰트 크기 신호가 불충분하거나
-  (표본 부족, 본문과 헤딩 크기가 거의 같은 문서) 아무것도 못 찾으면
-  기존과 동일하게 `language`만 있는 `book.yaml`을 쓴다. 휴리스틱이라
-  경계가 부정확할 수 있다 — `--no-headings`로 끄거나, 감지 결과를
-  `.md` 파일의 `## ` 마커를 직접 손으로 고친 뒤(파일을 물리적으로 쪼갤
-  필요 없음) 다시 빌드하면 된다.
+  적용돼 챕터별로 나뉜다. 폰트 크기 신호가 불충분하거나(표본 부족, 본문과
+  헤딩 크기가 거의 같은 문서) 아무것도 못 찾으면 기존과 동일하게
+  `language`만 있는 `book.yaml`을 쓴다. 휴리스틱이라 경계가 부정확할 수
+  있다 — `--no-headings`로 끄거나, 감지 결과를 `.md` 파일의 `## ` 마커를
+  직접 손으로 고친 뒤(파일을 물리적으로 쪼갤 필요 없음) 다시 빌드하면 된다.
 - 전체 PDF를 파일 하나로 추출한다 — Part_/Chapter_ 명명 규칙에 맞춘
   실제 파일 자동 분할은 아직 지원하지 않는다. 결과는 그 자체로 `build
   html`/`build pdf`/`translate`가 바로 받는 유효한 코퍼스다(자연정렬
@@ -475,9 +487,9 @@ Chapter_ 명명 규칙에 맞춘 실제 파일 자동 분할은 미지원 — [�
 한계](#알려진-한계) 참고). 사이드바 항목은 기본적으로 **마크다운 파일
 하나당 하나**씩 생기지만, `import`가 [폰트 크기로 챕터 제목을 자동
 감지](#pdf-임포트--import)해 `book.yaml`에 `split` 설정까지 함께
-쓰므로 대부분의 PDF는 **추가 조치 없이 `build html`만 다시 돌려도**
-챕터별로 나뉜다. 감지가 안 됐거나 경계가 부정확하면 아래 방법으로
-직접 만들거나 고친다.
+쓰므로 대부분의 PDF는 **추가 조치 없이 `build html`/`build pdf` 둘 다
+다시 돌려도** 챕터별로 나뉜다. 감지가 안 됐거나 경계가 부정확하면 아래
+방법으로 직접 만들거나 고친다.
 
 **1. `book.yaml`의 `split` — 파일은 그대로, 빌드 시점에만 쪼갠다(권장)**
 
@@ -487,15 +499,19 @@ split:
   heading_level: 2         # 기본값 2(= "## "). 생략 가능
 ```
 
-소스를 건드리지 않고 지정 헤딩 레벨(기본 H2) 경계마다 섹션을 나눠
-사이드바에 "챕터명 (링크)"로 보여준다. H2는 각 조각의 H1로 자동
+소스를 건드리지 않고 지정 헤딩 레벨(기본 H2) 경계마다 섹션을 나눈다 —
+`build html`은 사이드바에 "챕터명 (링크)"로 보여주고, `build pdf`는
+개별 모드에서 조각마다 별도 PDF(파일명 충돌 시 `-2`/`-3` 자동 부여),
+병합 모드에서 조각마다 별도 북마크를 만든다. H2는 각 조각의 H1로 자동
 승격되고, 펜스 코드·`@@HTML_START@@` raw HTML·blockquote 코드펜스
 안의 `## `는 경계로 오인하지 않는다. 쪼개진 챕터는 원본 제목을 Part
-헤딩으로 묶어 들여쓰기로 표시된다. 해당 레벨 헤딩이 없으면 조용히
-기존 동작(파일 1개 = 섹션 1개)으로 폴백하고, 되돌리려면 `split` 블록만
-지우면 된다. 단, 그 파일을 가리키는 상호참조 링크는 **첫 조각으로만**
-연결된다(파일 단위로만 앵커를 추적하는 기존 계약 — [HTML 도서
-빌드](#html-도서-빌드) 참고) — 특정 하위 챕터로 바로 연결하려면 2번처럼
+헤딩으로 묶어 들여쓰기(HTML)/중첩 북마크(PDF)로 표시된다. 해당 레벨
+헤딩이 없으면 조용히 기존 동작(파일 1개 = 섹션 1개)으로 폴백하고,
+되돌리려면 `split` 블록만 지우면 된다. 단, 그 파일을 가리키는
+상호참조 링크는(HTML 빌드에서만 해당 — PDF는 챕터 간 링크 재작성을
+하지 않는다) **첫 조각으로만** 연결된다(파일 단위로만 앵커를 추적하는
+기존 계약 — [HTML 도서 빌드](#html-도서-빌드) 참고) — 특정 하위
+챕터로 바로 연결하려면 2번처럼
 실제 파일을 쪼갠다.
 
 **2. 마크다운 직접 편집 — 실제 파일을 쪼개고 싶을 때**
@@ -519,7 +535,7 @@ H1 하나로 시작 — 원래 H2를 H1로 올린다). `Part_I_.../Chapter_01_�
 ### 로컬 LLM 번역 — translate
 
 ```bash
-mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e|e2k [--model ...] [--check-only]
+mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e|e2k [--model ...] [--check-only] [--resume]
 ```
 
 `pip install "mdbook-binder[translate]"`(ollama 클라이언트)와, 로컬에서 실행
@@ -538,6 +554,7 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
 | `--timeout INTEGER` | 청크 1건당 번역 타임아웃(초) | `book.yaml`의 `translation.timeout`, 없으면 300 |
 | `--chunk-chars INTEGER` | 청크 최대 글자수 | `book.yaml`의 `translation.chunk_chars`, 없으면 2000 |
 | `--check-only` | 실제 번역 없이 Ollama 연결·모델 설치 상태만 확인 | — |
+| `--resume` | `OUT_DIR`에 이미 있는 챕터는 재번역하지 않고 건너뜀 | 끔(항상 재번역) |
 
 **동작**
 
@@ -555,6 +572,12 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
 - 모델이 없어도 자동으로 pull하지 않는다 — 직접 `ollama pull <모델>`을
   실행해야 한다. `--check-only`로 실제 번역 전에 연결·모델 상태만 먼저
   확인할 수 있다.
+- **`--resume`으로 중단 후 이어할 수 있다** — `OUT_DIR`에 이미 결과
+  파일이 있는 챕터는 재번역하지 않고 건너뛴다. 네트워크/타임아웃으로
+  중간에 실패했을 때 같은 명령을 `--resume`으로 다시 실행하면 처음부터
+  다시 돌리지 않아도 된다. 챕터(파일) 단위로만 판단하므로, 챕터 하나가
+  절반만 번역된 채 중단됐다면 그 챕터는(아직 파일이 없으므로) 처음부터
+  다시 번역된다.
 
 `book.yaml`에 기본값을 지정해둘 수도 있다(CLI 옵션이 이 값보다 우선한다):
 
@@ -696,7 +719,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 257개 테스트 (cli 14 + manifest 20 + chapter_split 9 + html_book 18 + check 13 + editor 2 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 20 + pdf_import 85 + translation 38 + server 12)
+pytest tests/ -q      # 278개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 13 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 85 + translation 41 + server 12)
 ruff check src tests
 ```
 
@@ -729,14 +752,24 @@ ruff check src tests
   순수 함수·API·이미지 임베드 로직은 `test_pdf_book.py`/`test_server.py`/
   `test_editor.py`로 고정돼 있지만, 실제 브라우저로 렌더링하는
   `convert_one`은 수동 검증만 거쳤다.
+- **`edit --export-md`는 완전한 역방향 변환이 아니다**: HTML 도서를
+  마크다운 코퍼스로 되돌리되, 빌드 시점에 원본 정보가 이미 사라진
+  세 가지는 복원하지 못한다 — (1) 사전 렌더링에 성공한 Mermaid
+  다이어그램은 원본 소스가 지워지고 렌더링된 SVG 이미지로만 남는다
+  (렌더링 실패로 원본 텍스트가 남은 다이어그램은 완전히 복원됨), (2)
+  콜아웃(tip-box)이 어떤 마커 문자열을 썼는지는 HTML에 안 남아 일반
+  blockquote로 내보내진다, (3) `build html`이 `#앵커`로 재작성한 챕터
+  간 상호참조 링크는 원래 가리키던 `.md` 파일 경로로 되돌릴 수 없다.
 - **`import`는 Part_/Chapter_ 명명 규칙에 맞춘 실제 파일 자동 분할을
   지원하지 않는다**: PDF 전체를 파일 하나로 추출한다. 대신 폰트 크기
   기반으로 챕터 제목 후보를 감지해 `## ` 마커 + `book.yaml`의 `split`
   설정을 자동으로 붙이므로(휴리스틱, `--no-headings`로 끌 수 있음)
-  대부분의 경우 추가 조치 없이 사이드바가 챕터별로 나뉜다. 다만
-  휴리스틱이라 (1) 본문과 헤딩 폰트 크기가 거의 같은 문서에서는 아무것도
-  못 찾고, (2) 강조 인용문·표지 문구처럼 크고 짧은 텍스트를 헤딩으로
-  오인할 수 있다 — 감지 결과가 부정확하면 [import 결과물을 챕터별로
+  대부분의 경우 추가 조치 없이 `build html`/`build pdf` 둘 다 챕터별로
+  나뉜다. 다만 휴리스틱이라 (1) 본문과 헤딩 폰트 크기가 거의 같은
+  문서에서는 아무것도 못 찾고, (2) 본문만큼 흔하지 않으면서도 짧고
+  고립된(위아래 여백이 충분한) 텍스트라면 강조 문단·표지 문구도 여전히
+  헤딩으로 오인될 수 있다 — 감지 결과가 부정확하면 [import 결과물을
+  챕터별로
   분리하기](#import-결과물을-챕터별로-분리하기--사이드바-챕터-링크-만들기)의
   방법으로 직접 고친다. 텍스트 레이어가 없는 스캔 PDF도 지원하지 않는다
   — OCR 기능은 없다. 복잡한 다단 표(예: 병합 셀이 있는 평가표)는 표로
@@ -752,97 +785,113 @@ ruff check src tests
 
 ## 변경이력
 
+### 0.5.0 (2026-08-14) — edit 역방향 저장 + PDF 파이프라인 불일치 수정
+
+- **feat**: `edit --export-md` 코퍼스 역방향 내보내기 구현(.md + images/
+  + book.yaml, Mermaid 원본·콜아웃 마커·상호참조 링크 일부 복원 제약)
+- **fix**: `import` 헤딩 자동 감지 오탐 수정(희소성 필터·줄 간격 고립성
+  검사·과다감지 안전장치 강화, 오탐 4,244개 → 112개)
+- **fix**: `build pdf` `split` 설정 미적용 수정(개별 모드 파일 분리,
+  병합 모드 북마크 분리)
+- **feat**: `build pdf --title`/`--language` 추가(`build html`과 옵션
+  대칭화) — `--title`은 병합본 PDF 메타데이터 제목, `--language`는
+  각 페이지 `<html lang>`에 반영(기존 `"ko"` 하드코딩 수정)
+- **feat**: `translate --resume` 추가 — `OUT_DIR`에 이미 있는 챕터는
+  건너뛰어 중단 후 이어하기 지원
+- **fix**: blockquote 코드펜스(` > ``` `) 뒤 빈 줄을 정규식이 함께
+  집어삼켜, 바로 다음 문단(링크 등)이 별개 `<p>`가 아니라 코드블록에
+  `<br>`로 들러붙는 문제 수정
+- **fix**: `build pdf`에서 `#main{min-height:100vh}`가 리셋되지 않고
+  6000px 최소 뷰포트와 겹쳐, 챕터가 짧을 때마다 내용 없는 페이지가
+  하나씩 더 나오던 문제 수정 — `split`로 챕터가 잘게 나뉠수록 영향이
+  커서 이번에 함께 잡음
+- **fix**: `edit`로 섹션을 열어보기만 하고 그대로 저장해도 (1) 링크가
+  통째로 사라지고, (2) 콜아웃(tip-box)이 일반 문단으로 뭉개지고, (3)
+  인접한 순서/비순서 목록이 하나로 합쳐지고, (4) 코드 블록 언어 태그가
+  빠지던 네 가지 저장 왕복 손실 수정(`edit`/`--export-md` 둘 다 적용)
+- 회귀 테스트 21건 추가(총 278개)
+
 ### 0.4.2 (2026-08-14) — 단일 파일 코퍼스도 챕터별 사이드바로
 
-- **feat**: `book.yaml`의 `split: {files, heading_level}` 설정 추가 —
-  물리적 분할 없이 빌드 시점 H2 경계로 섹션을 나눠 사이드바에 챕터별
-  링크 노출(`chapter_split.py` 신설), 펜스 코드·raw HTML·blockquote
-  코드펜스 내부 `## `는 경계에서 제외.
-- **feat**: `import`가 폰트 크기 기반으로 챕터 제목을 자동 감지해 `## `
-  마커 삽입 + `split` 설정 자동 기입(`--no-headings`로 끌 수 있음).
-- 회귀 테스트 38건 추가(총 257개).
+- **feat**: `book.yaml` `split` 설정 추가(H2 경계 가상 챕터 분리,
+  `chapter_split.py` 신설)
+- **feat**: `import` 폰트 크기 기반 챕터 제목 자동 감지 + `split` 자동
+  기입 구현
+- 회귀 테스트 38건 추가(총 257개)
 
 ### 0.4.1 (2026-08-13) — Breaking: `import pdf` → `import`
 
-- **breaking**: `import pdf` → `import`로 평탄화(PDF 전용 스코프 확정),
-  `.pdf` 확장자 검증 추가.
-- **feat**: `translate` k2e 방향에 청크 단위 잔여 한글 검증·자동
-  재시도(최대 2회) 추가.
-- 회귀 테스트 24건 추가(총 219개).
+- **breaking**: `import pdf` → `import` 평탄화, `.pdf` 확장자 검증 추가
+- **feat**: `translate` k2e 잔여 한글 검증·자동 재시도(최대 2회) 구현
+- 회귀 테스트 24건 추가(총 219개)
 
 ### 0.4.0 (2026-08-13)
 
-- **feat**: `import pdf` 명령 추가(pdfplumber 컬럼/표/이미지 인식, 불릿·
-  단어 간격 자동 보정, 쪽번호 제거, 이미지 추출), `translate` 명령
-  추가(로컬 Ollama, 코드/Mermaid/raw-HTML 보존, 기본 모델 `exaone3.5:7.8b`).
-- **fix**: `check`/`translate` Ollama 모델명 매칭 불일치, 한글 폭 계산
-  오류로 인한 도움말 줄바꿈 깨짐, `import pdf`의 "#1)" 순번 표기
-  `<h1>` 오인식·불릿 뭉침 문제 수정.
-- **fix**: 웹 에디터 CDN 의존 → 로컬 번들로 교체(오프라인 대응).
-- 회귀 테스트 111건 추가(총 195개).
+- **feat**: `import pdf` 명령 추가(컬럼/표/이미지 인식, 불릿·간격 자동
+  보정, 쪽번호 제거)
+- **feat**: `translate` 명령 추가(로컬 Ollama, 코드/Mermaid/raw-HTML
+  보존)
+- **fix**: Ollama 모델명 매칭 불일치, 도움말 줄바꿈 깨짐, "#1)" 순번
+  오인식·불릿 뭉침 수정
+- **fix**: 웹 에디터 CDN 의존 제거(로컬 번들 전환)
+- 회귀 테스트 111건 추가(총 195개)
 
 ### 0.3.7 (2026-08-05)
 
-- **fix**: 굵은 글씨 안 링크 색상이 `strong` 상속색과 어긋나던 문제
-  수정 — 항상 `strong` 색을 따르도록 통일.
+- **fix**: 굵은 글씨 안 링크 색상 불일치 수정
 
 ### 0.3.6 (2026-08-05)
 
-- **feat**: 챕터 간 상대경로 `.md` 링크를 빌드 시점에 `#앵커`로 자동
-  재작성(죽은 링크 방지), 제외 파일·외부 URL은 원본 유지, NFC/NFD
-  파일명 정규화 불일치도 매칭.
-- 회귀 테스트 4건 추가(총 84개).
+- **feat**: 챕터 간 상대경로 링크 `#앵커` 자동 재작성 구현(NFC/NFD
+  정규화 매칭 포함)
+- 회귀 테스트 4건 추가(총 84개)
 
 ### 0.3.5 (2026-08-02)
 
-- **fix**: `playwright` 의존성에 버전 상한(`>=1.62,<1.63`) 추가 — 상한
-  없으면 재설치 시 Chromium 리비전 불일치로 `check`가 미설치로 오탐하던
-  문제 수정.
+- **fix**: `playwright` 버전 상한 추가(Chromium 리비전 불일치 오탐 수정)
 
 ### 0.3.4 (2026-08-02)
 
-- **feat**: `check`가 PDF 빌드·병합·웹 에디터 등 선택 기능 설치 상태도
-  점검해 설치 명령 안내.
-- **fix**: 여러 줄짜리 예외 메시지가 경고 문장에 끼어들어 줄바꿈 깨지던
-  문제 수정.
-- 회귀 테스트 10건 추가(총 80개).
+- **feat**: `check` 선택 기능 설치 상태 점검 강화
+- **fix**: 예외 메시지 줄바꿈 깨짐 수정
+- 회귀 테스트 10건 추가(총 80개)
 
 ### 0.3.3 (2026-08-02)
 
-- **fix**: 파일명 NFC/NFD 정규화 불일치로 `exclude`/`section_id_overrides`가
-  동일 파일을 놓치던 문제, 웹 편집기 이미지 서빙 API의 경로 화이트리스트
-  우회 문제 수정.
-- **feat**: 병합 PDF에 챕터별 북마크(Part 중첩 아웃라인) 추가.
-- CLI `--help` 텍스트 현행화, 회귀 테스트 33건 추가(총 70개).
+- **fix**: 파일명 NFC/NFD 정규화 불일치 수정
+- **fix**: 웹 편집기 이미지 서빙 API 경로 화이트리스트 우회 수정
+- **feat**: 병합 PDF 챕터별 북마크(Part 중첩) 추가
+- CLI 도움말 현행화, 회귀 테스트 33건 추가(총 70개)
 
 ### 0.3.2 (2026-07-28)
 
-- **fix**: PDF 변환 시 세로형 Mermaid 다이어그램의 페이지 경계 계산 오차로
-  생기던 빈 공백 문제 수정 — 실측 기반 청크 분할로 교체.
+- **fix**: 세로형 Mermaid PDF 페이지 경계 계산 오차 수정(실측 기반
+  청크 분할 전환)
 
 ### 0.3.1 (2026-07-28)
 
-- **feat**: `--color` 사이드바/제목 강조색 테마 옵션 추가(7종).
-- **fix**: Mermaid 서브그래프·긴 라벨 줄바꿈, 편집기 미리보기 폰트 불일치
-  등 렌더링 버그 수정.
-- 회귀 테스트 13건 추가(총 37개).
+- **feat**: `--color` 사이드바/제목 강조색 테마 옵션 추가(7종)
+- **fix**: Mermaid 서브그래프·라벨 줄바꿈, 편집기 미리보기 폰트 불일치
+  수정
+- 회귀 테스트 13건 추가(총 37개)
 
 ### 0.3.0 (2026-07-27)
 
-- **feat**: Mermaid 다이어그램 빌드 시점 정적 SVG 사전 렌더링(완전 오프라인
-  HTML) + 긴 라벨 자동 줄바꿈.
+- **feat**: Mermaid 빌드 시점 SVG 사전 렌더링 + 라벨 자동 줄바꿈 구현
 - **fix**: 한글 라벨 줄바꿈·CDN 로드 실패 대응·편집기 이미지 임베드·PDF
-  다이어그램/페이지 렌더링 버그 다수 수정.
-- 회귀 테스트 7건 추가(총 24개).
+  렌더링 버그 다수 수정
+- 회귀 테스트 7건 추가(총 24개)
 
 ### 0.2.0 (2026-07-27)
 
-- **feat**: `--version` 옵션 추가. **fix**: 버전/패키지명 불일치 수정.
+- **feat**: `--version` 옵션 추가
+- **fix**: 버전/패키지명 불일치 수정
 
 ### 0.1.0 (2026-07-26)
 
-- **rename**: `book-binder` → `mdbook-binder`. 초기 구현(마크다운 코퍼스 →
-  HTML/PDF 변환·편집) 및 패키징·렌더링 안정화.
+- **rename**: `book-binder` → `mdbook-binder`
+- 초기 구현(마크다운 코퍼스 → HTML/PDF 변환·편집) 및 패키징·렌더링
+  안정화
 
 ---
 

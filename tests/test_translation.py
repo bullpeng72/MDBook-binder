@@ -320,6 +320,60 @@ class TestTranslateCorpus:
 
         assert len(calls) == 1  # chunk_chars=1000이면 두 단락이 한 청크로 합쳐짐
 
+    def test_resume_skips_chapters_already_present_in_out_dir(self, tmp_path: Path):
+        """--resume은 중단 후 재실행 시 이미 번역된 챕터를 재번역하지 않아야
+        한다 — 대용량 코퍼스에서 중간 실패 시 처음부터 다시 돌리지 않게 한다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "01_chapter.md", "# 하나\n\n본문.\n")
+        _write(root, "02_chapter.md", "# 둘\n\n본문.\n")
+        out_dir.mkdir(parents=True)
+        (out_dir / "01_chapter.md").write_text("이미 번역된 결과", encoding="utf-8")
+        calls: list[str] = []
+
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: calls.append(s) or s,
+            resume=True,
+        )
+
+        # 이미 있던 01은 그대로 보존(재번역으로 덮어써지지 않음), 02만 새로 번역됨
+        assert (out_dir / "01_chapter.md").read_text(encoding="utf-8") == "이미 번역된 결과"
+        assert (out_dir / "02_chapter.md").exists()
+        assert not any("하나" in c for c in calls)
+
+    def test_resume_false_retranslates_existing_files(self, tmp_path: Path):
+        """resume 기본값(False)은 기존 동작 그대로 항상 재번역·덮어써야 한다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "# 챕터\n\n본문.\n")
+        out_dir.mkdir(parents=True)
+        (out_dir / "chapter.md").write_text("낡은 결과", encoding="utf-8")
+
+        translate_corpus(
+            root, out_dir, config=None, target_language="en", translate_fn=lambda s: "새 번역"
+        )
+
+        assert (out_dir / "chapter.md").read_text(encoding="utf-8") == "새 번역"
+
+    def test_resume_prints_skip_message(self, tmp_path: Path, capsys):
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "# 챕터\n\n본문.\n")
+        out_dir.mkdir(parents=True)
+        (out_dir / "chapter.md").write_text("이미 번역됨", encoding="utf-8")
+
+        translate_corpus(
+            root, out_dir, config=None, target_language="en", translate_fn=lambda s: s, resume=True
+        )
+
+        out = capsys.readouterr().out
+        assert "건너뜀" in out
+        assert "chapter.md" in out
+
 
 def test_build_prompt_instructs_markdown_preservation_and_includes_chunk():
     prompt = _build_prompt("hello world", "ko")

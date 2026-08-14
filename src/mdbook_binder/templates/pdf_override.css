@@ -4,6 +4,15 @@
   margin-left: 0 !important;
   width: 100% !important;
   padding: 0 24px 0 !important;
+  /* html_book.css의 #main{min-height:100vh}는 사이드바가 짧은 페이지에서도
+     화면을 꽉 채우도록 하는 HTML 전용 규칙이다. pdf_book.py는 mermaid 청크
+     캡처 좌표 계산을 위해 뷰포트 높이를 최소 6000px로 띄워두는데(convert_one
+     참고), 이 규칙을 안 지우면 #main도 6000px까지 늘어나 짧은 챕터마다
+     내용 없는 페이지가 하나씩 더 나온다(실사용 재현·확인됨).
+     min-height: auto가 아니라 0으로 명시하는 이유는, 브라우저 기본값도
+     이미 auto이지만 !important로 잠긴 100vh를 확실히 무력화하려면 값
+     자체를 바꿔야 하기 때문이다. */
+  min-height: 0 !important;
 }
 body {
   display: block !important;

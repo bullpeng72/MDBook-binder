@@ -16,7 +16,7 @@ import unicodedata
 from html import escape as _html_escape
 from pathlib import Path
 
-from mdbook_binder.chapter_split import split_chapter_markdown
+from mdbook_binder.chapter_split import extract_raw_h1, split_chapter_markdown
 from mdbook_binder.imgembed import image_to_data_uri
 from mdbook_binder.manifest import (
     LOCALE_STRINGS,
@@ -54,14 +54,6 @@ def _slugify(text: str) -> str:
     base = re.sub(r"[^\w\s-]", "", base, flags=re.UNICODE).strip().lower()
     slug = re.sub(r"[\s_]+", "-", base)
     return slug or "section"
-
-
-_RAW_H1_RE = re.compile(r"^#\s+(.+)$", re.MULTILINE)
-
-
-def _extract_raw_h1(text: str) -> str | None:
-    m = _RAW_H1_RE.search(text)
-    return m.group(1).strip() if m else None
 
 
 def _section_id(fpath: Path, html_body: str, config: BookConfig | None) -> str:
@@ -188,7 +180,7 @@ def build_html(
         # split.files에 등록됐어도 실제로 지정 레벨 헤딩이 없으면 pieces는
         # [raw] 그대로라 group_label도 None — 기존(파일 1개=섹션 1개) 동작과
         # 완전히 동일하게 폴백된다.
-        group_label = _extract_raw_h1(raw) if is_split_target and len(pieces) > 1 else None
+        group_label = extract_raw_h1(raw) if is_split_target and len(pieces) > 1 else None
 
         chap_key = unicodedata.normalize("NFC", str(chap.path.resolve()))
         for piece in pieces:

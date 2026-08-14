@@ -204,8 +204,25 @@ def build_html_cmd(
     help="출력 디렉토리 (기본: ROOT/pdf)",
 )
 @click.option("--color", "color_override", type=_COLOR_CHOICE, default=None, help=_COLOR_HELP)
+@click.option(
+    "--title",
+    "title_override",
+    default=None,
+    help="병합(--merge) PDF 문서 제목 (기본: book.yaml title/디렉토리명). 개별 모드는 챕터마다 자기 제목을 써서 영향 없음",
+)
+@click.option(
+    "--language",
+    "language_override",
+    default=None,
+    help="각 페이지 <html lang> 속성 (기본: book.yaml language 또는 ko)",
+)
 def build_pdf_cmd(
-    root: Path, merge_out: str | None, out_dir: Path | None, color_override: str | None
+    root: Path,
+    merge_out: str | None,
+    out_dir: Path | None,
+    color_override: str | None,
+    title_override: str | None,
+    language_override: str | None,
 ) -> None:
     """ROOT 아래 마크다운을 챕터별 PDF(또는 --merge 시 단권)로 빌드한다.
 
@@ -217,13 +234,25 @@ def build_pdf_cmd(
     Playwright/Chromium으로 각 챕터를 렌더링한다 — `pip install
     "mdbook-binder[pdf]"` 후 `python -m playwright install chromium`
     설치가 먼저 필요하다. 긴 Mermaid 다이어그램은 페이지 경계에 맞춰
-    청크 스크린샷으로 나눠 삽입해 도형이 잘리지 않게 한다.
+    청크 스크린샷으로 나눠 삽입해 도형이 잘리지 않게 한다. `book.yaml`의
+    `split` 설정(단일 파일을 헤딩 경계로 여러 사이드바 챕터로 나누는
+    설정)을 `build html`과 동일하게 적용한다 — 조각마다 별도 PDF(개별
+    모드) 또는 별도 북마크(병합 모드)가 생긴다. `--title`은 병합 PDF의
+    문서 메타데이터 제목에만 반영되고, `--language`는 모든 페이지의
+    `<html lang>` 속성에 반영된다.
     """
     from mdbook_binder.pdf_book import build_pdf
 
     print(f"\U0001f4da Building PDF from {root} ...")
     try:
-        build_pdf(root, merge_name=merge_out, out_dir=out_dir, color_override=color_override)
+        build_pdf(
+            root,
+            merge_name=merge_out,
+            out_dir=out_dir,
+            color_override=color_override,
+            title_override=title_override,
+            language_override=language_override,
+        )
     except RuntimeError as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -235,6 +264,7 @@ def build_pdf_cmd(
   mdbook-binder edit my-book.html
   mdbook-binder edit my-book.html --port 8080 --out final.html
   mdbook-binder edit my-book.html --no-browser   # URL 직접 열기
+  mdbook-binder edit my-book.html --export-md ./corpus_edited
 """,
 )
 @click.argument("html_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
@@ -247,7 +277,20 @@ def build_pdf_cmd(
     help="저장 경로 (기본: <stem>_edited.html, 원본 유지)",
 )
 @click.option("--no-browser", is_flag=True, default=False, help="브라우저 자동 오픈 생략")
-def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool) -> None:
+@click.option(
+    "--export-md",
+    "export_md_dir",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="저장할 때마다 마크다운 코퍼스(.md + images/ + book.yaml)도 이 디렉터리에 내보냄",
+)
+def edit_cmd(
+    html_path: Path,
+    port: int,
+    out_path: Path | None,
+    no_browser: bool,
+    export_md_dir: Path | None,
+) -> None:
     """HTML_PATH를 브라우저 편집 UI로 연다.
 
     \b
@@ -259,6 +302,13 @@ def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool
     마크다운 편집, 이미지 추가/교체/삭제, Mermaid 삭제, 이미지
     업로드·갤러리를 제공한다. `pip install "mdbook-binder[editor]"`
     (Flask/Pillow)가 필요하다.
+
+    \b
+    --export-md를 주면 브라우저에서 "저장"할 때마다 편집 결과를 HTML뿐
+    아니라 챕터별 .md + images/ + book.yaml로도 내보내(translate/build로
+    재사용 가능) — 단, Mermaid 사전 렌더링·콜아웃 마커·챕터 간 상대경로
+    링크는 빌드 시점에 원본 정보가 사라져 있어 완전히 복원되지 않는다
+    (내보낸 book.yaml 옆 파일에서 최선으로 근사한 결과만 제공).
     """
     from mdbook_binder.editor.server import run_editor
 
@@ -267,6 +317,7 @@ def edit_cmd(html_path: Path, port: int, out_path: Path | None, no_browser: bool
         output_path=str(out_path) if out_path else None,
         port=port,
         open_browser=not no_browser,
+        export_md_dir=str(export_md_dir) if export_md_dir else None,
     )
 
 
@@ -306,13 +357,14 @@ def import_cmd(
 
     \b
     전체를 단일 파일로 추출한다(Part_/Chapter_ 명명 규칙에 맞춘 실제
-    파일 자동 분할은 아직 지원 안 함). 대신 본문 폰트보다 눈에 띄게 큰
-    짧은 줄을 챕터 제목 후보로 감지해 "## " 마커를 붙이고, 하나라도
-    감지되면 book.yaml에 split 설정까지 자동으로 써서 build html만
-    다시 돌려도 챕터별 사이드바가 생기게 한다(--no-headings로 끌 수
-    있음 — 휴리스틱이라 문서에 따라 안 맞을 수 있고, 그럴 땐 .md의
-    "## " 마커를 손으로 고친 뒤 다시 빌드하면 된다). 이미지는 기본적으로
-    OUT_DIR/images/에 저장되고 본문 흐름의 원래 위치에 삽입된다
+    파일 자동 분할은 아직 지원 안 함). 대신 본문 폰트보다 눈에 띄게 크면서도
+    본문 대비 드물게 등장하는 짧고 고립된 줄을 챕터 제목 후보로 감지해
+    "## " 마커를 붙이고, 하나라도 감지되면 book.yaml에 split 설정까지
+    자동으로 써서 build html/build pdf 둘 다 추가 조치 없이 챕터별로
+    나뉘게 한다(--no-headings로 끌 수 있음 — 휴리스틱이라 문서에 따라 안
+    맞을 수 있고, 그럴 땐 .md의 "## " 마커를 손으로 고친 뒤 다시 빌드하면
+    된다). 이미지는 기본적으로 OUT_DIR/images/에 저장되고 본문 흐름의
+    원래 위치에 삽입된다
     (--no-images로 끌 수 있음) — 너무 작은 장식용 이미지와 반복되는
     로고/아이콘은 자동으로 제외한다. 결과는 그 자체로 build html/pdf나
     translate가 바로 받는 유효한 코퍼스다.
@@ -342,6 +394,7 @@ def import_cmd(
   mdbook-binder translate ~/book ~/book-ko --direction e2k
   mdbook-binder translate ~/book ~/book-ko --direction e2k --check-only
   mdbook-binder translate ~/book ~/book-en --direction k2e --model exaone3.5
+  mdbook-binder translate ~/book ~/book-ko --direction e2k --resume   # 중단 후 이어하기
 """,
 )
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
@@ -380,6 +433,12 @@ def import_cmd(
     default=False,
     help="번역 없이 Ollama 연결·모델 설치 상태만 확인",
 )
+@click.option(
+    "--resume",
+    is_flag=True,
+    default=False,
+    help="OUT_DIR에 이미 있는 챕터는 재번역하지 않고 건너뜀(중단 후 이어하기)",
+)
 def translate_cmd(
     root: Path,
     out_dir: Path,
@@ -389,6 +448,7 @@ def translate_cmd(
     timeout_override: int | None,
     chunk_chars_override: int | None,
     check_only: bool,
+    resume: bool,
 ) -> None:
     """ROOT의 마크다운 코퍼스를 로컬 Ollama로 번역해 OUT_DIR에 미러링한다.
 
@@ -403,7 +463,10 @@ def translate_cmd(
     language 필드는 방향에 맞춰(k2e→en, e2k→ko) 다시 쓴다. 청크 하나에도
     수십 초가 걸릴 수 있어 챕터·청크 단위 진행 상황을 출력한다. 모델이
     없어도 자동으로 pull하지 않는다 — `ollama pull <모델>`을 직접
-    실행해야 한다.
+    실행해야 한다. `--resume`을 주면 OUT_DIR에 이미 번역 결과 파일이
+    있는 챕터는 재번역 없이 건너뛴다 — 네트워크/타임아웃으로 중간에
+    실패했을 때 같은 명령을 다시 실행해 이어서 진행할 수 있다(챕터
+    단위로만 판단하므로 중단된 챕터 자체는 처음부터 다시 번역된다).
     """
     from mdbook_binder.check import check_ollama
     from mdbook_binder.manifest import TranslationConfig
@@ -429,7 +492,13 @@ def translate_cmd(
     translate_fn = make_ollama_translate_fn(cfg, target_language)
     print(f"\U0001f310 Translating {root} → {out_dir} ({direction}) via {cfg.model}@{cfg.host} ...")
     translate_corpus(
-        root, out_dir, config, target_language, translate_fn, chunk_chars=cfg.chunk_chars
+        root,
+        out_dir,
+        config,
+        target_language,
+        translate_fn,
+        chunk_chars=cfg.chunk_chars,
+        resume=resume,
     )
     print(f"✅ {out_dir}")
 
