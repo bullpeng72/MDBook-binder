@@ -443,7 +443,7 @@ def import_cmd(
     "--resume",
     is_flag=True,
     default=False,
-    help="OUT_DIR에 이미 있는 챕터는 재번역하지 않고 건너뜀(중단 후 이어하기)",
+    help="OUT_DIR에 이미 있는 챕터는 건너뜀(미완료 마커가 있으면 자동 재번역, 중단 후 이어하기)",
 )
 def translate_cmd(
     root: Path,
@@ -473,6 +473,11 @@ def translate_cmd(
     있는 챕터는 재번역 없이 건너뛴다 — 네트워크/타임아웃으로 중간에
     실패했을 때 같은 명령을 다시 실행해 이어서 진행할 수 있다(챕터
     단위로만 판단하므로 중단된 챕터 자체는 처음부터 다시 번역된다).
+    단, 재시도 후에도 청크가 한글로 남았던 챕터(k2e)는 OUT_DIR에 남긴
+    `.incomplete.json` 마커로 추적되어 "이미 있음"으로 건너뛰지 않고
+    자동으로 지운 뒤 재번역한다 — 같은 코퍼스를 `--resume`으로 반복
+    실행할수록 미완료 챕터가 점차 줄어드는 방향으로 품질이 개선된다
+    (e2k는 청크 검증 신호가 없어 이 자동 재번역 대상에 포함되지 않는다).
     """
     from mdbook_binder.check import check_ollama
     from mdbook_binder.manifest import TranslationConfig

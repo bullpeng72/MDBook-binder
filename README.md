@@ -146,7 +146,7 @@ MDBook-binder/
     ├── test_theme.py             # 색상 테마 프리셋 + book.yaml/--color 연동 (8건)
     ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 + 페이지 HTML 템플릿 (23건)
     ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 + 폰트 크기 기반 헤딩 감지 + 코드 블록 감지 (100건)
-    ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭·k2e 재시도·resume (41건)
+    ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭·k2e 재시도·resume·미완료 마커 (45건)
     └── test_server.py            # 웹 에디터 Flask API (12건)
 ```
 
@@ -559,7 +559,7 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
 | `--timeout INTEGER` | 청크 1건당 번역 타임아웃(초) | `book.yaml`의 `translation.timeout`, 없으면 300 |
 | `--chunk-chars INTEGER` | 청크 최대 글자수 | `book.yaml`의 `translation.chunk_chars`, 없으면 2000 |
 | `--check-only` | 실제 번역 없이 Ollama 연결·모델 설치 상태만 확인 | — |
-| `--resume` | `OUT_DIR`에 이미 있는 챕터는 재번역하지 않고 건너뜀 | 끔(항상 재번역) |
+| `--resume` | `OUT_DIR`에 이미 있는 챕터는 건너뜀(단, 미완료 마커가 있으면 자동 재번역) | 끔(항상 재번역) |
 
 **동작**
 
@@ -582,7 +582,12 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
   중간에 실패했을 때 같은 명령을 `--resume`으로 다시 실행하면 처음부터
   다시 돌리지 않아도 된다. 챕터(파일) 단위로만 판단하므로, 챕터 하나가
   절반만 번역된 채 중단됐다면 그 챕터는(아직 파일이 없으므로) 처음부터
-  다시 번역된다.
+  다시 번역된다. **단, 재시도 후에도 청크가 한글로 남았던 챕터(k2e)는
+  `OUT_DIR`에 `<파일명>.incomplete.json` 마커가 남아있어 "이미 있음"으로
+  건너뛰지 않고 자동으로 삭제 후 재번역한다** — 같은 코퍼스에
+  `--resume`을 반복 실행할수록(LLM 출력이 비결정적이므로) 미완료 챕터
+  수가 점차 줄어드는 방향으로 수렴한다. e2k는 청크 검증 신호가 없어
+  이 자동 재번역 대상에 포함되지 않는다.
 
 `book.yaml`에 기본값을 지정해둘 수도 있다(CLI 옵션이 이 값보다 우선한다):
 
@@ -634,11 +639,15 @@ translation:
 없기 때문이다 — 검증을 강행하면 정상 번역을 계속 오탐해 무의미한
 재시도만 반복하게 된다.
 
-**이미 번역이 끝난 코퍼스에는 소급 적용되지 않는다.** 이 검증은 `translate`
-실행 중에만 동작한다 — 이 기능이 추가되기 전에 만든 결과물(예: 이미
-`OUT_DIR`에 저장된 파일)은 자동으로 다시 검사되지 않는다. 잔여 한글이
-의심되면 같은 `translate` 명령을 다시 실행해 최신 검증·재시도 로직을
-타게 해야 한다.
+**검증은 번역 실행 중에만 동작하고, 결과는 `.incomplete.json` 마커로
+`OUT_DIR`에 남는다.** 이 마커가 있는 챕터는 이후 `--resume` 실행에서
+자동으로 삭제·재번역된다(위 [`--resume`](#로컬-llm-번역--translate) 참고) —
+즉 같은 코퍼스를 `--resume`으로 반복 돌리는 것만으로 미완료 챕터가 점차
+줄어든다. 다만 **마커는 이 버전(0.5.3) 이후 실행에만 만들어진다** — 그
+이전 버전으로 이미 번역해둔 `OUT_DIR`에는 마커가 없으므로, `--resume`이
+그 결과물을 "이미 있음"으로 계속 건너뛴다. 이런 결과물은 잔여 한글이
+의심되는 챕터 파일을 `OUT_DIR`에서 직접 지운 뒤 `--resume`으로
+재실행하거나, `--resume` 없이 `translate`를 다시 실행해야 한다.
 
 ---
 
@@ -724,7 +733,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 294개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 14 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 100 + translation 41 + server 12)
+pytest tests/ -q      # 298개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 14 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 100 + translation 45 + server 12)
 ruff check src tests
 ```
 
@@ -791,6 +800,18 @@ ruff check src tests
 ---
 
 ## 변경이력
+
+### 0.5.3 (2026-08-20) — translate --resume 미완료 청크 자동 재번역
+
+- **feat**: `translate`가 재시도 후에도 한글이 남은 챕터(k2e)를
+  `OUT_DIR`에 `<파일명>.incomplete.json` 마커로 남긴다. `--resume`은 이
+  마커가 있는 챕터를 "이미 번역됨"으로 건너뛰지 않고 자동으로 삭제·
+  재번역한다 — LLM 출력이 비결정적이므로, 같은 코퍼스에 `--resume`을
+  반복 실행할수록 미완료 챕터 수가 점차 줄어드는 방향으로 수렴한다.
+  마커는 이 버전 이후 실행에서만 생성되므로 이전 버전으로 이미 번역해둔
+  `OUT_DIR`에는 소급 적용되지 않는다(자세한 동작은
+  [k2e 번역 완전성 검증](#k2e-번역-완전성-검증--잔여-한글-자동-재시도) 참고)
+- 회귀 테스트 4건 추가(총 298개)
 
 ### 0.5.2 (2026-08-19) — PDF 임포트 코드 블록 감지 + 사전 점검·타입 정리
 

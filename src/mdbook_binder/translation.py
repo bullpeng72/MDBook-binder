@@ -15,10 +15,17 @@ k2e(한→영) 방향은 청크당 has_residual_korean()으로 번역 결과를 
 놓치고 원문을 그대로 돌려주는 경우가 실사용에서 잦았는데, 이전에는 그런
 결과를 검증 없이 그대로 통과시켰다. e2k는 검증하지 않는다(§translate_chapter
 docstring 참고 — 정상적인 영문 잔존과 번역 실패를 구분할 신호가 없음).
+
+재시도 후에도 미완료였던 챕터는 out_dir에 `.incomplete.json` 마커를 남긴다
+(§translate_corpus docstring). `--resume`은 이 마커가 있는 챕터를 "이미
+번역됨"으로 건너뛰지 않고 자동으로 삭제 후 재번역하므로, 같은 코퍼스를
+--resume으로 반복 실행하면(LLM 출력이 비결정적이므로) 미완료 챕터 수가
+점차 줄어드는 방향으로 수렴하는 것을 기대할 수 있다.
 """
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -178,6 +185,13 @@ def translate_chapter(
     return restore_blocks(reassemble_chunks(translated), blocks)
 
 
+def _incomplete_marker_path(dest: Path) -> Path:
+    """dest 옆에 두는 미완료 마커 경로. out_dir을 resolve()가 다시 걷지
+    않으므로(*.md만 스캔) .json 사이드카가 있어도 이후 빌드/번역에 영향이
+    없다."""
+    return dest.with_name(dest.name + ".incomplete.json")
+
+
 def translate_corpus(
     root: Path,
     out_dir: Path,
@@ -195,9 +209,16 @@ def translate_corpus(
     resume=True면 out_dir에 이미 결과 파일이 있는 챕터는 건너뛴다 — 대용량
     코퍼스 번역 중 네트워크/타임아웃으로 중간에 실패했을 때, 같은 명령을
     `--resume`으로 다시 실행하면 이미 끝난 챕터를 재번역하지 않고 이어서
-    진행할 수 있다. 챕터(파일) 단위로만 판단한다 — 청크 단위 부분 진행은
-    추적하지 않으므로, 챕터 하나가 절반만 번역된 채 중단됐다면 그 챕터는
-    (아직 out_dir에 파일이 없으므로) 처음부터 다시 번역된다.
+    진행할 수 있다. 챕터(파일) 단위로만 판단하되, 청크 하나라도 재시도 후에도
+    미완료였던 챕터는 dest 옆에 `<파일명>.incomplete.json` 마커를 남긴다 —
+    다음 --resume 실행에서 마커가 있는 챕터는 "이미 있다"고 건너뛰지 않고
+    자동으로 삭제 후 재번역한다. LLM 출력이 비결정적이라 같은 챕터를
+    --resume으로 반복 실행할수록 미완료 챕터 수가 점차 줄어드는 것이
+    기대 동작이다(수렴 보장은 없음 — 특정 청크가 매 시도 실패할 수도 있다).
+    이 마커는 on_incomplete가 실제로 호출될 때만 쓰이므로, 현재는 k2e
+    (has_residual_korean 검증이 있는 방향)에서만 의미 있게 동작한다 — e2k는
+    청크 검증 자체가 없어(§translate_chapter docstring) 마커가 생기지 않고,
+    기존과 동일하게 파일 존재 여부만으로 건너뛴다.
     """
     effective_chunk_chars = chunk_chars or (
         config.translation.chunk_chars
@@ -211,17 +232,25 @@ def translate_corpus(
     for i, chap in enumerate(chapters, start=1):
         rel = chap.path.relative_to(root)
         dest = out_dir / rel
+        marker = _incomplete_marker_path(dest)
 
         if resume and dest.exists():
-            print(f"⏭️  [{i}/{total}] {rel} — 이미 번역됨, 건너뜀")
-            continue
+            if marker.exists():
+                print(f"\U0001f501 [{i}/{total}] {rel} — 이전 실행에서 미완료 청크가 남아 재번역")
+                dest.unlink()
+                marker.unlink()
+            else:
+                print(f"⏭️  [{i}/{total}] {rel} — 이미 번역됨, 건너뜀")
+                continue
 
         print(f"\U0001f4c4 [{i}/{total}] {rel}")
 
         text = chap.path.read_text(encoding="utf-8")
         incomplete_chunks: list[int] = []
+        chunk_total_holder = [0]
 
-        def _on_chunk_start(j: int, n: int) -> None:
+        def _on_chunk_start(j: int, n: int, _holder: list[int] = chunk_total_holder) -> None:
+            _holder[0] = n
             print(f"  청크 {j}/{n} 번역 중...")
 
         def _on_incomplete(j: int, n: int, _sink: list[int] = incomplete_chunks) -> None:
@@ -236,12 +265,24 @@ def translate_corpus(
             on_incomplete=_on_incomplete,
         )
 
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(out_text, encoding="utf-8")
+
         if incomplete_chunks:
             print(f"  ⚠️  재시도 후에도 한글이 남은 청크: {incomplete_chunks} — 수동 확인 필요")
             incomplete_chapters.append(f"{rel} (청크 {incomplete_chunks})")
-
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(out_text, encoding="utf-8")
+            marker.write_text(
+                json.dumps(
+                    {
+                        "incomplete_chunks": incomplete_chunks,
+                        "total_chunks": chunk_total_holder[0],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        elif marker.exists():
+            marker.unlink()
 
     _write_translated_book_yaml(root, out_dir, target_language)
 

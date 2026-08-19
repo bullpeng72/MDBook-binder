@@ -5,6 +5,7 @@
 함수는 전부 순수/의사-순수라 가짜 translate_fn만으로 충분히 테스트된다.
 """
 
+import json
 from pathlib import Path
 
 import yaml
@@ -319,6 +320,89 @@ class TestTranslateCorpus:
         )
 
         assert len(calls) == 1  # chunk_chars=1000이면 두 단락이 한 청크로 합쳐짐
+
+    def test_incomplete_chunks_write_marker_file(self, tmp_path: Path):
+        """재시도 후에도 한글이 남은 챕터는 dest 옆에 .incomplete.json 마커를
+        남겨야 한다 — --resume이 이 챕터를 "이미 번역됨"으로 착각해 건너뛰지
+        않도록 하는 신호다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "한글 원문입니다.\n")
+
+        translate_corpus(root, out_dir, config=None, target_language="en", translate_fn=lambda s: s)
+
+        marker = out_dir / "chapter.md.incomplete.json"
+        assert marker.exists()
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        assert data["incomplete_chunks"] == [1]
+        assert data["total_chunks"] == 1
+
+    def test_clean_translation_leaves_no_marker(self, tmp_path: Path):
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "한글 원문입니다.\n")
+
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: "Clean translation.",
+        )
+
+        assert not (out_dir / "chapter.md.incomplete.json").exists()
+
+    def test_resume_retranslates_chapter_marked_incomplete(self, tmp_path: Path):
+        """--resume은 이전 실행의 미완료 마커가 남은 챕터를 "이미 번역됨"으로
+        건너뛰지 않고 자동으로 삭제 후 재번역해야 한다 — 반복 --resume 실행으로
+        점차 미완료 챕터가 줄어드는 것이 목표다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "한글 원문입니다.\n")
+        out_dir.mkdir(parents=True)
+        (out_dir / "chapter.md").write_text("한글 원문입니다.\n", encoding="utf-8")  # 이전 실행의 미완료 결과
+        (out_dir / "chapter.md.incomplete.json").write_text(
+            json.dumps({"incomplete_chunks": [1], "total_chunks": 1}), encoding="utf-8"
+        )
+        calls: list[str] = []
+
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: calls.append(s) or "Clean translation.",
+            resume=True,
+        )
+
+        # 마커가 있었으므로 건너뛰지 않고 실제로 translate_fn이 호출되어야 한다
+        assert len(calls) == 1
+        assert (out_dir / "chapter.md").read_text(encoding="utf-8") == "Clean translation."
+        # 이번엔 성공했으므로 마커는 정리된다
+        assert not (out_dir / "chapter.md.incomplete.json").exists()
+
+    def test_resume_keeps_marker_when_still_incomplete_after_retry(self, tmp_path: Path):
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "한글 원문입니다.\n")
+        out_dir.mkdir(parents=True)
+        (out_dir / "chapter.md").write_text("한글 원문입니다.\n", encoding="utf-8")
+        (out_dir / "chapter.md.incomplete.json").write_text(
+            json.dumps({"incomplete_chunks": [1], "total_chunks": 1}), encoding="utf-8"
+        )
+
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: s,  # 이번 재시도도 원문을 그대로 반환 — 여전히 실패
+            resume=True,
+        )
+
+        marker = out_dir / "chapter.md.incomplete.json"
+        assert marker.exists()
+        assert json.loads(marker.read_text(encoding="utf-8"))["incomplete_chunks"] == [1]
 
     def test_resume_skips_chapters_already_present_in_out_dir(self, tmp_path: Path):
         """--resume은 중단 후 재실행 시 이미 번역된 챕터를 재번역하지 않아야
