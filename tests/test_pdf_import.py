@@ -1,15 +1,20 @@
 """pdf_import.py의 텍스트 정리(순수 함수) + PDF→코퍼스 추출 회귀 테스트."""
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from mdbook_binder.manifest import TIER_NATURAL_SORT, resolve_verbose
 from mdbook_binder.pdf_import import (
+    _CODE_FENCE_CLOSE_SENTINEL,
+    _CODE_FENCE_OPEN_SENTINEL,
     _HEADING_SENTINEL,
     _detect_document_bullet_chars,
     _filter_repeated_images,
     _group_into_rows,
+    _is_code_row,
     _mark_heading_words,
     _row_groups,
+    _rows_to_text,
     _save_images_and_build_elements,
     calibrate_body_font_size,
     calibrate_word_x_tolerance,
@@ -25,15 +30,22 @@ from mdbook_binder.pdf_import import (
 
 
 def _word(
-    text: str, x0: float, top: float, *, char_width: float = 6.0, height: float = 12.0
+    text: str,
+    x0: float,
+    top: float,
+    *,
+    char_width: float = 6.0,
+    height: float = 12.0,
+    fontname: str = "Helvetica",
 ) -> dict:
-    """pdfplumber의 extract_words() 반환 형식(x0/x1/top/bottom)을 흉내낸 단어 dict를 만든다."""
+    """pdfplumber의 extract_words() 반환 형식(x0/x1/top/bottom/fontname)을 흉내낸 단어 dict를 만든다."""
     return {
         "text": text,
         "x0": x0,
         "x1": x0 + len(text) * char_width,
         "top": top,
         "bottom": top + height,
+        "fontname": fontname,
     }
 
 
@@ -46,6 +58,19 @@ def _prose_words(
         x = x_start
         for w in line.split():
             words.append(_word(w, x, y_start + i * y_step))
+            x += len(w) * 6 + 4
+    return words
+
+
+def _code_words(
+    lines: list[str], *, x_start: float = 72.0, y_start: float = 100.0, y_step: float = 14.0
+) -> list[dict]:
+    """고정폭 폰트(Courier)로 조판된 것처럼 fontname을 채운 가짜 단어 목록을 만든다."""
+    words: list[dict] = []
+    for i, line in enumerate(lines):
+        x = x_start
+        for w in line.split():
+            words.append(_word(w, x, y_start + i * y_step, fontname="ABCDEF+CourierNewPSMT"))
             x += len(w) * 6 + 4
     return words
 
@@ -86,7 +111,7 @@ def _make_minimal_pdf(lines: list[str]) -> bytes:
     return bytes(out)
 
 
-def _make_positioned_pdf(placements: list[tuple[str, float, float]]) -> bytes:
+def _make_positioned_pdf(placements: Sequence[tuple[str, float, float]]) -> bytes:
     """(텍스트, x, y) 절대좌표 배치를 받아 최소 유효 PDF를 만든다 — 2단
     레이아웃·표처럼 특정 x좌표에 텍스트를 놓아야 하는 픽스처용. _make_minimal_pdf()는
     순차적인 줄내림(Td)만 지원해 이런 배치를 표현할 수 없다."""
@@ -120,7 +145,7 @@ def _make_positioned_pdf(placements: list[tuple[str, float, float]]) -> bytes:
     return bytes(out)
 
 
-def _make_pdf_with_font_sizes(placements: list[tuple[str, float, float, float]]) -> bytes:
+def _make_pdf_with_font_sizes(placements: Sequence[tuple[str, float, float, float]]) -> bytes:
     """(텍스트, x, y, 폰트크기) 배치를 받아 최소 유효 PDF를 만든다 — 챕터
     제목 후보 감지(폰트 크기 기반)를 검증하려면 줄마다 다른 크기가 필요한데
     `_make_positioned_pdf()`는 고정 12pt만 지원해 이 용도로 못 쓴다."""
@@ -137,6 +162,42 @@ def _make_pdf_with_font_sizes(placements: list[tuple[str, float, float, float]])
             b"/MediaBox [0 0 612 792] /Contents 5 0 R >>"
         ),
         b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
+    ]
+    out = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for i, obj in enumerate(objects, start=1):
+        offsets.append(len(out))
+        out += f"{i} 0 obj\n".encode() + obj + b"\nendobj\n"
+    xref_offset = len(out)
+    out += f"xref\n0 {len(objects) + 1}\n".encode()
+    out += b"0000000000 65535 f \n"
+    for off in offsets[1:]:
+        out += f"{off:010d} 00000 n \n".encode()
+    out += f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_offset}\n%%EOF".encode()
+    return bytes(out)
+
+
+def _make_pdf_with_fonts(placements: Sequence[tuple[str, float, float, str]]) -> bytes:
+    """(텍스트, x, y, 폰트별칭) 배치를 받아 최소 유효 PDF를 만든다 — 코드 블록
+    감지는 fontname으로 판정하므로, 같은 페이지에 프로즈용 /F1(Helvetica)과
+    코드용 /F2(Courier)가 섞여야 검증할 수 있다. 둘 다 PDF 표준 14 폰트라
+    별도 임베딩 없이도 pdfminer.six가 내장 AFM 메트릭으로 정확한 글자
+    위치를 계산한다."""
+    ops = []
+    for text, x, y, font in placements:
+        ops.append(f"BT /{font} 12 Tf 1 0 0 1 {x} {y} Tm ({text}) Tj ET")
+    stream = "\n".join(ops).encode("latin-1")
+
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        (
+            b"<< /Type /Page /Parent 2 0 R /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> "
+            b"/MediaBox [0 0 612 792] /Contents 6 0 R >>"
+        ),
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Courier >>",
         b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"\nendstream",
     ]
     out = bytearray(b"%PDF-1.4\n")
@@ -315,6 +376,43 @@ class TestCleanParagraphs:
         assert clean_paragraphs(raw) == "\\## Not a real heading either"
 
 
+class TestCleanParagraphsCodeBlock:
+    def test_code_fence_sentinels_become_markdown_fence(self):
+        raw = (
+            "Intro paragraph.\n"
+            f"{_CODE_FENCE_OPEN_SENTINEL}\n"
+            "def hello():\n"
+            "print('world')\n"
+            f"{_CODE_FENCE_CLOSE_SENTINEL}\n"
+            "Outro paragraph."
+        )
+        assert clean_paragraphs(raw) == (
+            "Intro paragraph.\n\n```\ndef hello():\nprint('world')\n```\n\nOutro paragraph."
+        )
+
+    def test_lines_inside_code_block_are_not_hard_wrap_joined(self):
+        """코드 줄은 문장부호로 안 끝나도(대부분의 코드 줄이 그렇다) 다음
+        줄과 합쳐지면 안 된다 — 산문에만 적용되는 하드랩 해제 규칙 예외."""
+        raw = f"{_CODE_FENCE_OPEN_SENTINEL}\nline one\nline two\n{_CODE_FENCE_CLOSE_SENTINEL}"
+        assert clean_paragraphs(raw) == "```\nline one\nline two\n```"
+
+    def test_lines_inside_code_block_are_not_bullet_split(self):
+        """"-"로 시작하는 코드 줄(음수 리터럴, CLI 플래그 등)이 불릿 마커로
+        오인돼 쪼개지면 안 된다."""
+        raw = f"{_CODE_FENCE_OPEN_SENTINEL}\n- 5\nx = -5\n{_CODE_FENCE_CLOSE_SENTINEL}"
+        assert clean_paragraphs(raw) == "```\n- 5\nx = -5\n```"
+
+    def test_leading_hash_inside_code_block_not_escaped(self):
+        """"#"으로 시작하는 코드 줄(파이썬 주석 등)은 헤딩 오인 방지용
+        이스케이프 대상이 아니다 — 코드 블록 밖에서만 적용되는 규칙."""
+        raw = f"{_CODE_FENCE_OPEN_SENTINEL}\n# comment\nx = 1\n{_CODE_FENCE_CLOSE_SENTINEL}"
+        assert clean_paragraphs(raw) == "```\n# comment\nx = 1\n```"
+
+    def test_blank_line_inside_code_block_preserved_not_treated_as_paragraph_break(self):
+        raw = f"{_CODE_FENCE_OPEN_SENTINEL}\ndef f():\n\n    pass\n{_CODE_FENCE_CLOSE_SENTINEL}"
+        assert clean_paragraphs(raw) == "```\ndef f():\n\n    pass\n```"
+
+
 class TestHeadingDetection:
     def test_row_with_much_larger_font_is_a_heading_candidate(self):
         rows = [[_word("Chapter", 72, 100)], [_word("Body text here.", 72, 130)]]
@@ -399,6 +497,74 @@ class TestGroupIntoRows:
 
     def test_empty_input_returns_no_rows(self):
         assert _group_into_rows([]) == []
+
+
+class TestIsCodeRow:
+    def test_all_monospace_words_is_code_row(self):
+        row = [
+            _word("def", 72, 100, fontname="ABCDEF+CourierNewPSMT"),
+            _word("hello():", 100, 100, fontname="ABCDEF+CourierNewPSMT"),
+        ]
+        assert _is_code_row(row) is True
+
+    def test_prose_fontname_is_not_code_row(self):
+        row = [_word("Hello", 72, 100, fontname="Helvetica")]
+        assert _is_code_row(row) is False
+
+    def test_mixed_fonts_in_one_row_is_not_code_row(self):
+        """강조를 위해 한 단어만 고정폭 폰트로 조판된 산문 줄(드묾)까지
+        코드로 오인하면 안 된다 — 줄 전체가 고정폭이어야 한다."""
+        row = [
+            _word("normal", 72, 100, fontname="Helvetica"),
+            _word("code()", 110, 100, fontname="Courier"),
+        ]
+        assert _is_code_row(row) is False
+
+    def test_word_without_fontname_key_is_not_code_row(self):
+        """_mark_heading_words()/_save_images_and_build_elements()가 끼워 넣는
+        합성 요소는 fontname이 아예 없다 — 판단 근거 부족으로 코드가 아니다."""
+        row = [{"text": "## heading", "x0": 72, "x1": 100, "top": 100, "bottom": 112}]
+        assert _is_code_row(row) is False
+
+    def test_empty_row_is_not_code_row(self):
+        assert _is_code_row([]) is False
+
+
+class TestRowsToText:
+    def test_two_or_more_consecutive_code_rows_get_fenced(self):
+        rows = _group_into_rows(_code_words(["def hello():", "print('world')"]))
+        text = _rows_to_text(rows)
+        assert text.split("\n") == [
+            _CODE_FENCE_OPEN_SENTINEL,
+            "def hello():",
+            "print('world')",
+            _CODE_FENCE_CLOSE_SENTINEL,
+        ]
+
+    def test_single_code_row_is_not_fenced(self):
+        """오탐 방지 최소 신뢰 기준(_MIN_CODE_BLOCK_ROWS) 미만이면 조용히
+        평문으로 남는다 — 기존 동작과 동일해 실패해도 손해가 없다."""
+        rows = _group_into_rows(_code_words(["pip install foo"]))
+        text = _rows_to_text(rows)
+        assert text == "pip install foo"
+        assert _CODE_FENCE_OPEN_SENTINEL not in text
+
+    def test_prose_rows_are_not_fenced(self):
+        rows = _group_into_rows(_prose_words(["Just a normal paragraph line here"]))
+        text = _rows_to_text(rows)
+        assert _CODE_FENCE_OPEN_SENTINEL not in text
+
+    def test_code_block_surrounded_by_prose(self):
+        rows = [
+            *_group_into_rows(_prose_words(["Intro line before the code sample"])),
+            *_group_into_rows(_code_words(["def hello():", "print('world')"])),
+            *_group_into_rows(_prose_words(["Outro line after the code sample"])),
+        ]
+        lines = _rows_to_text(rows).split("\n")
+        assert lines[0] == "Intro line before the code sample"
+        assert lines[1] == _CODE_FENCE_OPEN_SENTINEL
+        assert lines[-2] == _CODE_FENCE_CLOSE_SENTINEL
+        assert lines[-1] == "Outro line after the code sample"
 
 
 class TestDetectColumns:
@@ -819,6 +985,30 @@ def test_import_pdf_renders_genuine_table_as_markdown(tmp_path: Path):
     assert "| Name" in body
     assert "| Alice" in body
     assert "-" * 3 in body  # 헤더 구분선(| --- | --- |)이 있어야 유효한 마크다운 표
+
+
+def test_import_pdf_wraps_courier_lines_in_code_fence(tmp_path: Path):
+    """실제 PDF(임베딩 없는 표준 14 폰트 Courier)로 fontname이 pdfplumber를
+    거쳐 _is_code_row()까지 온전히 전달되는지 확인하는 종단 간 테스트."""
+    placements = [
+        ("Intro paragraph before the code sample.", 72, 700, "F1"),
+        ("def hello():", 72, 670, "F2"),
+        ("print(42)", 72, 656, "F2"),
+        ("Outro paragraph after the code sample.", 72, 620, "F1"),
+    ]
+    pdf_path = tmp_path / "code.pdf"
+    pdf_path.write_bytes(_make_pdf_with_fonts(placements))
+    out_dir = tmp_path / "corpus"
+
+    md_path = import_pdf(pdf_path, out_dir)
+    body = md_path.read_text(encoding="utf-8")
+
+    assert "```\ndef hello():\nprint(42)\n```" in body
+    assert "Intro paragraph before the code sample." in body
+    assert "Outro paragraph after the code sample." in body
+    # 코드 블록 앞뒤 프로즈는 펜스 밖에 있어야 한다(코드로 오인돼 감싸이면 안 됨).
+    assert "Intro paragraph before the code sample.\n\n```" in body
+    assert "```\n\nOutro paragraph after the code sample." in body
 
 
 def _fake_image(hash_val: str, x0: float = 0, top: float = 0) -> dict:

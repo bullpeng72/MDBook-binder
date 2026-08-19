@@ -239,9 +239,11 @@ class TestEditRoundTripFidelity:
 
         ed = self._round_trip(html_path, "a")
         sec = ed.soup.find("section", id="a")
+        assert sec is not None
 
-        assert sec.find("a") is not None
-        assert sec.find("a")["href"] == "#b"
+        link = sec.find("a")
+        assert link is not None
+        assert link["href"] == "#b"
 
     def test_tip_box_survives_noop_save(self, tmp_path: Path):
         _write(tmp_path, "chapter.md", "# 챕터\n\n> \U0001f4a1 콜아웃입니다.\n")
@@ -251,9 +253,11 @@ class TestEditRoundTripFidelity:
         sec_id = BookHTMLEditor(str(html_path)).get_book_meta()["sections"][0]["id"]
         ed = self._round_trip(html_path, sec_id)
         sec = ed.soup.find("section", id=sec_id)
+        assert sec is not None
 
-        assert sec.find("div", class_="tip-box") is not None
-        assert "콜아웃입니다" in sec.find("div", class_="tip-box").get_text()
+        tip_box = sec.find("div", class_="tip-box")
+        assert tip_box is not None
+        assert "콜아웃입니다" in tip_box.get_text()
 
     def test_adjacent_ordered_and_unordered_lists_stay_separate(self, tmp_path: Path):
         _write(
@@ -266,11 +270,14 @@ class TestEditRoundTripFidelity:
         sec_id = BookHTMLEditor(str(html_path)).get_book_meta()["sections"][0]["id"]
         ed = self._round_trip(html_path, sec_id)
         sec = ed.soup.find("section", id=sec_id)
+        assert sec is not None
 
-        assert sec.find("ul") is not None
-        assert sec.find("ol") is not None
-        assert len(sec.find("ul").find_all("li")) == 2
-        assert len(sec.find("ol").find_all("li")) == 2
+        ul = sec.find("ul")
+        ol = sec.find("ol")
+        assert ul is not None
+        assert ol is not None
+        assert len(ul.find_all("li")) == 2
+        assert len(ol.find_all("li")) == 2
 
     def test_code_fence_language_survives_noop_save(self, tmp_path: Path):
         _write(tmp_path, "chapter.md", "# 챕터\n\n```python\ndef f():\n    pass\n```\n")
@@ -279,6 +286,7 @@ class TestEditRoundTripFidelity:
         sec_id = BookHTMLEditor(str(html_path)).get_book_meta()["sections"][0]["id"]
         ed = self._round_trip(html_path, sec_id)
         sec = ed.soup.find("section", id=sec_id)
+        assert sec is not None
 
         code = sec.find("code")
         assert code is not None

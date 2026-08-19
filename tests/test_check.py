@@ -12,6 +12,7 @@ from mdbook_binder.check import (
     check_environment,
     check_ollama,
     format_env_report,
+    format_report,
 )
 from mdbook_binder.manifest import (
     TIER_NATURAL_SORT,
@@ -64,6 +65,18 @@ def test_no_false_positive_for_remote_or_data_uri_images(tmp_path: Path):
     result = check_corpus(tmp_path)
 
     assert result.missing_images == []
+
+
+def test_zero_chapters_is_flagged_as_a_problem(tmp_path: Path):
+    """빈 코퍼스는 build html/pdf가 즉시 실패하는 조건이므로, "빌드 전에
+    미리 잡는다"는 check의 취지대로 ✅ 문제 없음이 아니라 경고로 나와야
+    한다."""
+    result = check_corpus(tmp_path)
+
+    assert result.chapters == []
+    report = format_report(tmp_path, result)
+    assert "문제 없음" not in report
+    assert "챕터를 하나도 찾지 못했습니다" in report
 
 
 def test_check_module_reports_installed():

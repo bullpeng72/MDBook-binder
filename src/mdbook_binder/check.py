@@ -94,7 +94,10 @@ def format_report(root: Path, result: CheckResult) -> str:
                 rel = abs_path
             lines.append(f'   - {rel}  (참조: "{src}")')
 
-    if not result.duplicate_titles and not result.missing_images:
+    if not result.chapters:
+        lines.append("")
+        lines.append("⚠️  챕터를 하나도 찾지 못했습니다 — build 시 실패합니다.")
+    elif not result.duplicate_titles and not result.missing_images:
         lines.append("")
         lines.append("✅ 문제 없음")
 

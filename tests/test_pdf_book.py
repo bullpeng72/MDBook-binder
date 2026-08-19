@@ -49,7 +49,9 @@ def _flatten_outline(
         if isinstance(item, list):
             flat.extend(_flatten_outline(item, reader, depth + 1))
         else:
-            flat.append((item.title, depth, reader.get_destination_page_number(item)))
+            page_number = reader.get_destination_page_number(item)
+            assert page_number is not None
+            flat.append((item.title, depth, page_number))
     return flat
 
 

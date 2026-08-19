@@ -69,6 +69,8 @@ def check_cmd(root: Path) -> None:
     확인 항목:
     - 챕터 순서: book.yaml order → toc 매니페스트 → Part/Chapter 명명
       규칙 → 자연정렬 중 무엇으로 정해졌는지와 최종 순서
+    - 챕터 없음: 하나도 못 찾으면 경고(잘못된 ROOT 지정 등 — build는 이
+      경우 바로 실패한다)
     - 중복 제목: 같은 h1 제목을 쓰는 챕터(HTML id에 -2, -3... 자동 부여됨)
     - 누락 이미지: 마크다운이 참조하지만 실제로 없는 이미지 파일
     - 선택 기능(extras): PDF 빌드·웹 에디터·번역에 필요한 패키지 설치 여부
@@ -348,7 +350,7 @@ def edit_cmd(
 def import_cmd(
     pdf_path: Path, out_dir: Path, title_override: str | None, no_images: bool, no_headings: bool
 ) -> None:
-    """PDF를 마크다운 코퍼스로 추출한다(지원 포맷은 PDF뿐 — docx 등은 PDF로 변환 후 사용).
+    """PDF를 마크다운 코퍼스로 추출한다.
 
     \b
     인자:
@@ -356,18 +358,22 @@ def import_cmd(
       OUT_DIR   마크다운 코퍼스를 생성할 디렉토리
 
     \b
-    전체를 단일 파일로 추출한다(Part_/Chapter_ 명명 규칙에 맞춘 실제
-    파일 자동 분할은 아직 지원 안 함). 대신 본문 폰트보다 눈에 띄게 크면서도
-    본문 대비 드물게 등장하는 짧고 고립된 줄을 챕터 제목 후보로 감지해
-    "## " 마커를 붙이고, 하나라도 감지되면 book.yaml에 split 설정까지
-    자동으로 써서 build html/build pdf 둘 다 추가 조치 없이 챕터별로
-    나뉘게 한다(--no-headings로 끌 수 있음 — 휴리스틱이라 문서에 따라 안
-    맞을 수 있고, 그럴 땐 .md의 "## " 마커를 손으로 고친 뒤 다시 빌드하면
-    된다). 이미지는 기본적으로 OUT_DIR/images/에 저장되고 본문 흐름의
-    원래 위치에 삽입된다
-    (--no-images로 끌 수 있음) — 너무 작은 장식용 이미지와 반복되는
-    로고/아이콘은 자동으로 제외한다. 결과는 그 자체로 build html/pdf나
-    translate가 바로 받는 유효한 코퍼스다.
+    지원 포맷은 PDF뿐이다 — docx 등 다른 포맷은 PDF로 변환(워드프로세서의
+    "PDF로 저장" 등) 후 이 명령에 넣는다. 전체를 단일 파일로 추출한다
+    (Part_/Chapter_ 명명 규칙에 맞춘 실제 파일 자동 분할은 아직 지원 안
+    함). 대신 본문 폰트보다 눈에 띄게 크면서도 본문 대비 드물게 등장하는
+    짧고 고립된 줄을 챕터 제목 후보로 감지해 "## " 마커를 붙이고,
+    하나라도 감지되면 book.yaml에 split 설정까지 자동으로 써서 build
+    html/build pdf 둘 다 추가 조치 없이 챕터별로 나뉘게 한다
+    (--no-headings로 끌 수 있음 — 휴리스틱이라 문서에 따라 안 맞을 수
+    있고, 그럴 땐 .md의 "## " 마커를 손으로 고친 뒤 다시 빌드하면 된다).
+    고정폭 폰트(Courier/Consolas 등)로 조판된 줄이 2줄 이상 연속되면
+    코드 블록으로 보고 마크다운 코드 펜스로 감싼다(들여쓰기·굵게/기울임은
+    복원되지 않는다). 이미지는 기본적으로 OUT_DIR/images/에 저장되고
+    본문 흐름의 원래 위치에 삽입된다(--no-images로 끌 수 있음) — 너무
+    작은 장식용 이미지와 반복되는 로고/아이콘은 자동으로 제외한다.
+    결과는 그 자체로 build html/pdf나 translate가 바로 받는 유효한
+    코퍼스다.
     """
     if pdf_path.suffix.lower() != ".pdf":
         raise click.ClickException(

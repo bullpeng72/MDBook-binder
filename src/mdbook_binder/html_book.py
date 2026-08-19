@@ -254,6 +254,7 @@ def build_html(
     )
 
     out = out_path or (root / f"{_slugify(title)}.html")
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(html, encoding="utf-8")
     size_kb = out.stat().st_size // 1024
     file_note = (

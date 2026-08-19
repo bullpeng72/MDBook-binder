@@ -11,14 +11,36 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import NotRequired, TypedDict
 
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Tag
 
 from mdbook_binder.imgembed import image_to_data_uri
 
 logger = logging.getLogger("mdbook_binder.editor")
 
 _IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+
+
+class _Replacement(TypedDict):
+    new_path: str
+
+
+class _Changes(TypedDict):
+    delete: set[int]
+    replace: dict[int, _Replacement]
+    add: list[dict]
+    diagram_delete: set[int]
+
+
+class _ImageAlternative(TypedDict):
+    path: str
+    page: int | None
+    source: str
+    filename: str
+    score: int
+    index: NotRequired[int]
+    description: NotRequired[str]
 
 
 class ImageEditor:
@@ -37,7 +59,7 @@ class ImageEditor:
         self.images = self._extract_images()
         self.diagrams = self._extract_diagrams()
 
-        self.changes = {
+        self.changes: _Changes = {
             "delete": set(),
             "replace": {},
             "add": [],
@@ -123,7 +145,7 @@ class ImageEditor:
         seen_dgm_ids: set = set()
 
         for tag in self.soup.descendants:
-            if not hasattr(tag, "name") or tag.name is None:
+            if not isinstance(tag, Tag):
                 continue
 
             if tag.name == "img" and id(tag) in img_by_id:
@@ -193,13 +215,17 @@ class ImageEditor:
             return True
         return False
 
-    def find_alternative_images(self, image_index: int, max_results: int = 5) -> list[dict]:
+    def find_alternative_images(
+        self, image_index: int, max_results: int = 5
+    ) -> list[_ImageAlternative]:
         if not (1 <= image_index <= len(self.images)):
             return []
         current_img = self.images[image_index - 1]
         return self._search_filesystem(current_img, max_results)
 
-    def _search_filesystem(self, current_img: dict, max_results: int) -> list[dict]:
+    def _search_filesystem(
+        self, current_img: dict, max_results: int
+    ) -> list[_ImageAlternative]:
         """HTML 파일 인근 디렉토리에서 대체 이미지를 찾는다.
 
         Lecture_forge 원본은 전역 Config.DATA_DIR(모든 강의 세션 공용 이미지
@@ -215,7 +241,7 @@ class ImageEditor:
         if not images_base:
             return []
 
-        alternatives = []
+        alternatives: list[_ImageAlternative] = []
         current_page = current_img.get("page")
         current_src = current_img.get("src", "")
 

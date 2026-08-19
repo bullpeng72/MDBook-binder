@@ -139,13 +139,13 @@ MDBook-binder/
     ├── test_manifest.py          # 3단계 순서 해석 + split 설정 파싱/해석 (20건)
     ├── test_chapter_split.py     # H2 경계 탐지·분할(펜스/raw HTML/blockquote 보호) (9건)
     ├── test_html_book.py         # 섹션 id 충돌 회피·이미지 임베드·챕터 간 링크 재작성·가상 분할 (18건)
-    ├── test_check.py             # 사전 점검 + 설치 환경 점검 (13건)
+    ├── test_check.py             # 사전 점검 + 설치 환경 점검 (14건)
     ├── test_editor.py            # 이미지 추가/교체 후 base64 임베드 + 코퍼스 역방향 내보내기 + 저장 왕복 충실도 (14건)
     ├── test_mermaid_prerender.py # Mermaid 사전 렌더링 성공/폴백 (6건)
     ├── test_mermaid_wrap.py      # 라벨 자동 줄바꿈 (12건)
     ├── test_theme.py             # 색상 테마 프리셋 + book.yaml/--color 연동 (8건)
     ├── test_pdf_book.py          # PDF 페이지 경계 계산 순수 함수 + 페이지 HTML 템플릿 (23건)
-    ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 + 폰트 크기 기반 헤딩 감지 (85건)
+    ├── test_pdf_import.py        # 컬럼/표/불릿/이미지 추출 + 폰트 크기 기반 헤딩 감지 + 코드 블록 감지 (100건)
     ├── test_translation.py       # 청크 분할·블록 보호·모델명 매칭·k2e 재시도·resume (41건)
     └── test_server.py            # 웹 에디터 Flask API (12건)
 ```
@@ -319,8 +319,9 @@ pip/pipx로 설치된 별도 CLI이며 이 저장소 안에는 없다). 챕터�
 ### 빌드 전 사전 점검 — check
 
 실제로 HTML을 렌더링하지 않고 원본 마크다운만 훑어 빠르게 확인한다 — 챕터가
-아닌 문서(예: 집필 가이드 `.md`)가 잘못 포함되는 것을 빌드 후에야 발견하는
-일을 줄인다. 이어서 PDF 빌드(Playwright Chromium)·웹 에디터(Flask/Pillow) 등
+아닌 문서(예: 집필 가이드 `.md`)가 잘못 포함되는 것이나 챕터를 하나도 찾지
+못한 경우(잘못된 `ROOT` 지정 등 — 이대로 빌드하면 즉시 실패한다)를 빌드 후에야
+발견하는 일을 줄인다. 이어서 PDF 빌드(Playwright Chromium)·웹 에디터(Flask/Pillow) 등
 선택 기능(extras)의 설치 상태도 함께 점검해, 몇 분짜리 빌드를 끝까지 돌리고
 나서야 브라우저 엔진 미설치 오류를 보는 대신 미리 설치 명령을 안내받는다.
 
@@ -451,6 +452,10 @@ docx 등 다른 포맷 문서는 PDF로 변환(워드프로세서의 "PDF로 저
 
 - pdfplumber로 단어별 좌표를 읽어 다단(2단 이상) 레이아웃을 컬럼별로
   위→아래 순서로 재조립하고, 표처럼 정렬된 줄은 마크다운 표로 재구성한다.
+- 폰트명(Courier/Consolas 등 고정폭 계열)으로 코드 블록을 감지해 2줄 이상
+  연속되면 ` ``` ` 펜스로 감싼다. 단, 들여쓰기는 복원하지 못한다(단어를
+  공백 하나로만 이어붙이는 추출 방식의 한계) — 코드 내용 자체는 보존되지만
+  포맷은 손으로 다듬어야 할 수 있다.
 - 문서마다 다른 불릿 글리프·단어 간격을 표본 조사해 자동 보정한다(예:
   구두점 없는 커스텀 불릿 폰트, 좁은 자간으로 단어가 붙어버리는 문서).
 - 쪽번호로 추정되는, 페이지 여백에 홀로 있는 숫자를 위치 기반으로 제거한다.
@@ -719,7 +724,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 278개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 13 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 85 + translation 41 + server 12)
+pytest tests/ -q      # 294개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 14 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 100 + translation 41 + server 12)
 ruff check src tests
 ```
 
@@ -773,7 +778,9 @@ ruff check src tests
   분리하기](#import-결과물을-챕터별로-분리하기--사이드바-챕터-링크-만들기)의
   방법으로 직접 고친다. 텍스트 레이어가 없는 스캔 PDF도 지원하지 않는다
   — OCR 기능은 없다. 복잡한 다단 표(예: 병합 셀이 있는 평가표)는 표로
-  인식되지 못하고 일반 문단으로 추출될 수 있다.
+  인식되지 못하고 일반 문단으로 추출될 수 있다. 고정폭 폰트로 조판된 코드
+  블록은 감지해 ` ``` ` 펜스로 감싸지만(2줄 미만이면 조용히 평문으로
+  남음), 들여쓰기·굵게/기울임은 복원하지 못한다.
 - **`translate`는 로컬 Ollama 서버가 필수다**: 원격/클라우드 LLM API는
   지원하지 않는다 — 항상 `localhost`(또는 지정한 host)에서 실행 중인
   Ollama 서버와 미리 받아둔(`ollama pull`) 모델이 있어야 한다.
@@ -784,6 +791,24 @@ ruff check src tests
 ---
 
 ## 변경이력
+
+### 0.5.2 (2026-08-19) — PDF 임포트 코드 블록 감지 + 사전 점검·타입 정리
+
+- **feat**: `import`가 고정폭 폰트(Courier/Consolas 등)로 조판된 줄을
+  감지해 2줄 이상 연속되면 ` ``` ` 코드 펜스로 감싼다 — 지금까지는
+  코드 샘플이 있는 PDF를 가져오면 전부 평문으로 뭉개졌다. 들여쓰기·
+  굵게/기울임은 여전히 복원하지 못한다(알려진 한계에 명시)
+- **fix**: `build html --out`이 상위 디렉토리가 없으면 raw traceback으로
+  죽던 문제 수정 — `build pdf`처럼 상위 디렉토리를 자동으로 만들도록 통일
+- **fix**: `check`가 챕터를 하나도 못 찾은 코퍼스(잘못된 `ROOT` 지정 등)를
+  "✅ 문제 없음"으로 보고하던 문제 수정 — `build`는 이 경우 즉시 실패하므로
+  사전 점검의 취지에 맞게 경고로 바꿈
+- **fix**: `import` 실행 시 pdfminer 내부 경고("Could not get FontBBox...")가
+  진짜 오류처럼 stderr에 쏟아지던 노이즈 억제(추출 결과에는 영향 없던
+  정상 경로)
+- 🧹 **techdebt**: `editor/html_editor.py`/`editor/image_editor.py`의 bs4
+  관련 mypy 타입 오류 22건을 `TypedDict`/`Literal`로 정리(동작 변화 없음)
+- 회귀 테스트 16건 추가(총 294개)
 
 ### 0.5.1 (2026-08-14) — 편집기 툴바 아이콘 폰트 누락 패키징 버그 수정
 

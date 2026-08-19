@@ -125,6 +125,7 @@ class TestTranslationConfig:
         _write(tmp_path, "book.yaml", "title: 예시\n")
 
         config = BookConfig.load(tmp_path)
+        assert config is not None
 
         assert config.translation is None
 
@@ -140,6 +141,7 @@ class TestTranslationConfig:
         )
 
         config = BookConfig.load(tmp_path)
+        assert config is not None
 
         assert config.translation == TranslationConfig(
             model="llama3:8b", host="http://remote:11434", timeout=120, chunk_chars=500
@@ -150,6 +152,8 @@ class TestTranslationConfig:
         _write(tmp_path, "book.yaml", "translation:\n  model: llama3:8b\n")
 
         config = BookConfig.load(tmp_path)
+        assert config is not None
+        assert config.translation is not None
 
         assert config.translation.model == "llama3:8b"
         assert config.translation.host == TranslationConfig().host
@@ -162,6 +166,7 @@ class TestSplitConfig:
         _write(tmp_path, "book.yaml", "title: 예시\n")
 
         config = BookConfig.load(tmp_path)
+        assert config is not None
 
         assert config.split is None
 
@@ -173,6 +178,7 @@ class TestSplitConfig:
         )
 
         config = BookConfig.load(tmp_path)
+        assert config is not None
 
         assert config.split == SplitConfig(files=["My_Book.md"], heading_level=3)
 
@@ -180,6 +186,8 @@ class TestSplitConfig:
         _write(tmp_path, "book.yaml", "split:\n  files: [My_Book.md]\n")
 
         config = BookConfig.load(tmp_path)
+        assert config is not None
+        assert config.split is not None
 
         assert config.split.heading_level == 2
 

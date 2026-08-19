@@ -49,6 +49,7 @@ pdfplumber로 단어별 (x, y) 좌표를 직접 얻어 두 가지를 처리한�
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from collections import Counter
 from pathlib import Path
@@ -143,6 +144,23 @@ _MD_H2_RE = re.compile(r"^##\s+\S", re.MULTILINE)
 # 건너뛴다(휴리스틱 비활성화가 오탐보다 안전하다는 원칙, calibrate_word_x_tolerance()와
 # 동일한 태도).
 _MIN_FONT_SIZE_SAMPLES = 20
+# 코드 블록으로 감싼 줄을 표시하는 마커 — _HEADING_SENTINEL과 같은 이유로
+# 리터럴 "```"를 못 쓴다: 마크다운/코드를 설명하는 PDF는 본문에 "```"가
+# 그대로 등장할 수 있어(예: 코드 펜스 문법을 인용하는 튜토리얼), 그런
+# 원문 줄과 우리가 직접 삽입한 펜스를 문자열만으로 구분할 방법이 없다.
+_CODE_FENCE_OPEN_SENTINEL = "\x01CODE\x01"
+_CODE_FENCE_CLOSE_SENTINEL = "\x01/CODE\x01"
+# 폰트명에 이 패턴이 있으면 고정폭(monospace) 폰트로 본다 — 서브셋 접두사
+# ("ABCDEF+CourierNewPSMT" 등)가 붙어도 substring 매치라 걸린다. 흔한
+# 코드용 서체(Courier 계열, Consolas, 그리고 이름에 "Mono"가 들어간 대부분의
+# 고정폭 서체: Menlo, DejaVu Sans Mono, Source Code Pro 등)를 포괄한다.
+_MONOSPACE_FONTNAME_RE = re.compile(r"courier|consolas|mono", re.IGNORECASE)
+# 연속된 고정폭 줄이 이 줄 수 미만이면 코드 블록으로 감싸지 않는다 — 강조
+# 목적으로 단어 하나만 고정폭 폰트를 쓴 산문 줄(드묾)까지 코드로 오인하는
+# 것을 막는 최소 신뢰 기준. detect_table()의 min_rows, _detect_document_bullet_chars()의
+# min_occurrences와 같은 "확신 없으면 건드리지 않는다" 원칙. 임계값 미만이면
+# 조용히 평문으로 남는다 — 기존 동작(전부 평문)과 동일해 실패해도 손해가 없다.
+_MIN_CODE_BLOCK_ROWS = 2
 
 
 def _detect_document_bullet_chars(raw_text: str, *, min_occurrences: int = 5) -> set[str]:
@@ -377,8 +395,45 @@ def _rows_to_table_markdown(rows: list[list[dict]], gap_threshold: float = 20.0)
     return "\n".join(lines)
 
 
+def _is_code_row(row: list[dict]) -> bool:
+    """줄의 모든 단어가 고정폭 폰트로 조판됐는지 판정한다(순수 함수).
+
+    fontname이 없는 단어(예: _mark_heading_words()가 끼워 넣은 헤딩 마커,
+    _save_images_and_build_elements()가 끼워 넣은 이미지 참조 요소)가 하나라도
+    섞이면 판단 근거가 부족하므로 코드 줄로 보지 않는다 — 실제 word 좌표만
+    fontname을 갖는다.
+    """
+    if not row:
+        return False
+    fontnames = [w.get("fontname") for w in row]
+    return all(f and _MONOSPACE_FONTNAME_RE.search(f) for f in fontnames)
+
+
 def _rows_to_text(rows: list[list[dict]]) -> str:
-    return "\n".join(" ".join(w["text"] for w in row) for row in rows)
+    """줄들을 이어붙이되, _MIN_CODE_BLOCK_ROWS줄 이상 연속된 고정폭 줄은
+    _CODE_FENCE_*_SENTINEL로 감싼다(clean_paragraphs()가 나중에 실제
+    "```" 마크다운 펜스로 바꾼다 — _mark_heading_words()와 같은 2단계
+    마커→실제 마크다운 치환 패턴).
+    """
+    lines: list[str] = []
+    i = 0
+    while i < len(rows):
+        if _is_code_row(rows[i]):
+            j = i + 1
+            while j < len(rows) and _is_code_row(rows[j]):
+                j += 1
+            run = rows[i:j]
+            if len(run) >= _MIN_CODE_BLOCK_ROWS:
+                lines.append(_CODE_FENCE_OPEN_SENTINEL)
+                lines.extend(" ".join(w["text"] for w in row) for row in run)
+                lines.append(_CODE_FENCE_CLOSE_SENTINEL)
+            else:
+                lines.extend(" ".join(w["text"] for w in row) for row in run)
+            i = j
+        else:
+            lines.append(" ".join(w["text"] for w in rows[i]))
+            i += 1
+    return "\n".join(lines)
 
 
 def _process_columns(words: list[dict]) -> str:
@@ -878,6 +933,12 @@ def extract_pdf_text(
     """
     import pdfplumber
 
+    # pdfminer.six가 손상되거나 비표준인 폰트 디스크립터를 만날 때마다
+    # "Could not get FontBBox..." 같은 내부 경고를 stderr에 찍는다 — 추출
+    # 결과에는 영향 없는 정상 경로라 (Chromium이 PDF로 찍은 폰트도 흔히
+    # 걸린다) 사용자에게는 진짜 오류처럼 보이는 노이즈일 뿐이다.
+    logging.getLogger("pdfminer").setLevel(logging.ERROR)
+
     with pdfplumber.open(str(pdf_path)) as pdf:
         x_tolerance = calibrate_word_x_tolerance(_sample_char_gaps(pdf))
         body_size = calibrate_body_font_size(_sample_font_sizes(pdf)) if detect_headings else None
@@ -894,7 +955,7 @@ def extract_pdf_text(
 
         words_per_page = []
         for page, img_elements in zip(pdf.pages, image_elements_per_page):
-            words = page.extract_words(x_tolerance=x_tolerance, extra_attrs=["size"])
+            words = page.extract_words(x_tolerance=x_tolerance, extra_attrs=["size", "fontname"])
             words = filter_garbled_words(words)
             words = filter_page_number_words(words, page.height)
             words_per_page.append(words + img_elements)
@@ -957,6 +1018,9 @@ def clean_paragraphs(raw_text: str) -> str:
       그 앞에서 쪼개고, 불릿과 동일하게 새 단락 경계로 취급한다
     - 단어 중간 하이픈 개행은 하이픈 없이 그대로 합친다
     - 빈 줄(몇 개가 연속이든)은 단락 구분 하나로 정규화된다
+    - _rows_to_text()가 감지한 고정폭(코드) 블록은 내부 줄을 하드랩 해제·
+      불릿 분리·"#" 이스케이프 없이 그대로 보존하고 "```" 마크다운 펜스로
+      감싼다
 
     페이지 경계를 넘어 이어지는 문장은 다루지 않는다 — extract_pdf_text()가
     페이지 텍스트를 페이지 단위로 반환하므로 여기 도달할 때는 이미 하나의
@@ -968,6 +1032,8 @@ def clean_paragraphs(raw_text: str) -> str:
     paragraphs: list[str] = []
     current: list[str] = []
     block_lines: list[str] = []
+    code_lines: list[str] = []
+    in_code_block = False
 
     def flush_prose() -> None:
         if current:
@@ -981,6 +1047,28 @@ def clean_paragraphs(raw_text: str) -> str:
 
     for raw_line in raw_text.split("\n"):
         line = raw_line.strip()
+
+        # 코드 블록 안에서는 다른 모든 판정(하드랩 해제·불릿·헤딩·"#" 이스케이프)을
+        # 건너뛰고 원문 줄을 그대로(들여쓰기 포함 — raw_line, strip 안 한 line
+        # 아님) 모은다. 빈 줄도 코드 안의 의도된 빈 줄이므로 단락 구분으로
+        # 취급하지 않는다. _rows_to_text()가 실제로 만드는 코드 줄에는 들여쓰기가
+        # 없지만(단어를 공백 하나로만 이어붙임 — 알려진 한계), clean_paragraphs()는
+        # 그 가정에 기대지 않는 일반 함수라 원문을 그대로 보존한다.
+        if in_code_block:
+            if line == _CODE_FENCE_CLOSE_SENTINEL:
+                paragraphs.append("```\n" + "\n".join(code_lines) + "\n```")
+                code_lines.clear()
+                in_code_block = False
+            else:
+                code_lines.append(raw_line)
+            continue
+
+        if line == _CODE_FENCE_OPEN_SENTINEL:
+            flush_prose()
+            flush_block()
+            in_code_block = True
+            continue
+
         if not line:
             flush_prose()
             flush_block()

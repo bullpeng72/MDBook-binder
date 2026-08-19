@@ -14,6 +14,7 @@ import logging
 import mimetypes
 import re
 from pathlib import Path
+from typing import Literal, TypedDict
 
 import markdown
 from bs4 import BeautifulSoup, Tag
@@ -25,6 +26,14 @@ from mdbook_binder.manifest import write_minimal_book_yaml
 logger = logging.getLogger("mdbook_binder.editor")
 
 _DATA_URI_RE = re.compile(r"^data:([^;,]*)?(;base64)?,(.*)$", re.DOTALL)
+
+
+class _StagedEdit(TypedDict):
+    title: str
+    markdown: str
+
+
+_StagedChange = _StagedEdit | Literal["deleted"]
 
 
 def _protect_code_blocks(clone: BeautifulSoup) -> dict[str, str]:
@@ -215,7 +224,7 @@ class BookHTMLEditor:
         self._deduplicate_section_ids()
 
         # Staging: {section_id: {"title": ..., "markdown": ...}} or "deleted"
-        self._staged: dict[str, object] = {}
+        self._staged: dict[str, _StagedChange] = {}
         # Image additions: {section_id: [{"path": ..., "caption": ...}]}
         self._added_images: dict[str, list[dict]] = {}
 
@@ -238,7 +247,7 @@ class BookHTMLEditor:
 
         sections = []
         for sec in self.soup.find_all("section", id=True):
-            sec_id = sec.get("id", "")
+            sec_id = str(sec.get("id", ""))
             h2 = sec.find("h2")
             if not h2:
                 continue
@@ -400,10 +409,10 @@ class BookHTMLEditor:
     def _deduplicate_section_ids(self) -> None:
         """중복된 <section id="..."> 를 제자리에서 고유하게 만든다."""
         seen: dict[str, int] = {}
-        all_ids: set = {s.get("id", "") for s in self.soup.find_all("section", id=True)}
+        all_ids: set[str] = {str(s.get("id", "")) for s in self.soup.find_all("section", id=True)}
 
         for sec in self.soup.find_all("section", id=True):
-            sec_id = sec.get("id", "")
+            sec_id = str(sec.get("id", ""))
             occurrence = seen.get(sec_id, 0)
             seen[sec_id] = occurrence + 1
 
