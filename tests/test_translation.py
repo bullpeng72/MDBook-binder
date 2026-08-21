@@ -14,6 +14,8 @@ import yaml
 from mdbook_binder.manifest import BookConfig, TranslationConfig
 from mdbook_binder.translation import (
     _build_prompt,
+    _looks_like_cell_hallucination,
+    _translate_cell,
     chunk_paragraphs,
     has_residual_korean,
     is_table_chunk,
@@ -370,6 +372,21 @@ class TestTranslateTableChunk:
         rows = out.split("\n")
         assert all(row.count("|") == 4 for row in rows)  # 3열 = 파이프 4개
 
+    def test_hallucinated_cell_does_not_break_row_structure(self):
+        """셀 하나가 환각(개행 섞인 응답)을 내도 최종 표의 각 행은 여전히
+        한 줄이어야 한다 — 실사용에서 표 전체가 깨지던 실패 사례의 회귀 테스트."""
+        chunk = "| a | 체크리스트 |\n|---|---|\n| 1 | 항목 |"
+
+        def hallucinate_first_cell(cell: str) -> str:
+            if cell == "체크리스트":
+                return "## Checklist\n\n* item one\n* item two"
+            return cell.upper()
+
+        out = translate_table_chunk(chunk, hallucinate_first_cell)
+        rows = out.split("\n")
+        assert len(rows) == 3  # 헤더/구분선/데이터 3행 그대로 — 환각으로 행이 늘지 않음
+        assert "체크리스트" in rows[0]  # 재시도도 실패했으니 원문 셀 그대로 보존
+
     def test_falls_back_to_translate_fn_when_not_a_table(self):
         """방어적 폴백 — is_table_chunk()가 아닌 입력이 실수로 들어와도
         조용히 깨지지 않고 기존 방식(전체를 translate_fn에 통째로)으로 처리."""
@@ -377,6 +394,47 @@ class TestTranslateTableChunk:
         out = translate_table_chunk("그냥 산문.", lambda c: calls.append(c) or "번역됨")
         assert calls == ["그냥 산문."]
         assert out == "번역됨"
+
+
+class TestLooksLikeCellHallucination:
+    def test_normal_short_translation_is_not_flagged(self):
+        assert not _looks_like_cell_hallucination("모호한 지시", "Ambiguous instruction")
+
+    def test_multiline_result_is_flagged(self):
+        """정상적인 셀 번역은 항상 한 줄이다 — 개행이 생겼다는 것은 모델이
+        표 셀이 아니라 제목·리스트 같은 블록 요소를 지어냈다는 신호다."""
+        assert _looks_like_cell_hallucination("체크리스트", "## Checklist\n\n* one\n* two")
+
+    def test_grossly_oversized_result_is_flagged(self):
+        """3단어짜리 셀이 수백 자로 부풀려지는 실사용 환각 패턴을 잡는다."""
+        original = "코드 리뷰 체크리스트"
+        hallucinated = "Code Review Checklist: " + ("Functionality check item. " * 10)
+        assert _looks_like_cell_hallucination(original, hallucinated)
+
+    def test_proportionally_longer_translation_is_not_flagged(self):
+        """한국어보다 영어가 좀 더 길어지는 정상적인 경우까지 오탐하면 안 된다."""
+        assert not _looks_like_cell_hallucination("담당", "Responsible party")
+
+
+class TestTranslateCell:
+    def test_clean_result_is_returned_as_is(self):
+        assert _translate_cell("문제", lambda c: "Issue") == "Issue"
+
+    def test_retries_once_on_suspected_hallucination(self):
+        calls: list[str] = []
+
+        def flaky(cell: str) -> str:
+            calls.append(cell)
+            return "## Fabricated\n\n* item" if len(calls) == 1 else "Clean translation"
+
+        assert _translate_cell("셀", flaky) == "Clean translation"
+        assert len(calls) == 2
+
+    def test_falls_back_to_original_when_retry_also_hallucinates(self):
+        """재시도까지 환각이면 표 구조를 깨는 대신 원문 셀을 그대로 남긴다 —
+        미번역 셀은 챕터 단위 has_residual_korean 재시도가 잡아준다."""
+        out = _translate_cell("셀", lambda c: "## Always fabricated\n\n* item")
+        assert out == "셀"
 
 
 class TestTranslateChunk:

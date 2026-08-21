@@ -751,7 +751,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 320개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 14 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 100 + translation 67 + server 12)
+pytest tests/ -q      # 328개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 14 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 100 + translation 75 + server 12)
 ruff check src tests
 ```
 
@@ -818,6 +818,17 @@ ruff check src tests
 ---
 
 ## 변경이력
+
+### 0.5.5 (2026-08-21) — k2e 표 셀 번역 환각 방지
+
+- **fix**: k2e 번역에서 짧은 표 셀·문단을 번역할 때 로컬 모델이 원문을
+  번역하는 대신 프롬프트가 언급한 마크다운 요소(제목·리스트·표 등)의 가짜
+  예시를 지어내 표 구조를 깨뜨리고, 재시도해도 같은 실패가 반복되던 문제
+  수정 — 마크다운 보존 지시를 "요소를 나열해 유지하라"에서 "이미 있는
+  것만 유지하고 새로 지어내지 마라"는 금지형으로 바꾸고, 표 셀 번역
+  결과에 개행·과도한 길이가 감지되면 한 번 더 재시도한 뒤에도 같은
+  증상이면 표 구조를 깨는 대신 원문 셀을 그대로 보존한다
+- 회귀 테스트 8건 추가(총 328개)
 
 ### 0.5.4 (2026-08-21) — 표 셀 단위 번역 + Ollama 옵션 조정 + 청크 단위 --resume
 

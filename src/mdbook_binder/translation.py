@@ -157,6 +157,44 @@ def is_table_chunk(chunk: str) -> bool:
     return bool(_TABLE_PROCESSOR.test(None, chunk))  # type: ignore[arg-type]
 
 
+_CELL_HALLUCINATION_LEN_MULTIPLIER = 4
+_CELL_HALLUCINATION_LEN_SLACK = 40
+
+
+def _looks_like_cell_hallucination(original: str, result: str) -> bool:
+    """짧은 표 셀 번역 결과가 원문 셀이 아니라 프롬프트가 언급한 마크다운
+    요소(제목·리스트·표 등)의 예시를 지어낸 환각인지 어림짐작한다(순수 함수).
+
+    실사용 실패 사례에서 이 환각은 두 신호로 거의 항상 구분됐다 — (1) 셀
+    안에 개행이 생긴다(정상 셀 번역은 항상 한 줄), (2) 원문 길이 대비 결과가
+    비정상적으로 길다(3단어 셀이 수백 자짜리 체크리스트로 부풀려지는 식).
+    두 신호 중 하나만 봐도 표 구조를 깨뜨리므로(줄 단위 재조립을 가정하는
+    translate_table_chunk) 임계값을 넉넉히 잡아 과탐지보다 놓치는 쪽을
+    택하지 않는다.
+    """
+    if "\n" in result:
+        return True
+    return len(result) > len(original) * _CELL_HALLUCINATION_LEN_MULTIPLIER + _CELL_HALLUCINATION_LEN_SLACK
+
+
+def _translate_cell(cell: str, translate_fn: Callable[[str], str]) -> str:
+    """셀 하나를 번역하고, 결과가 환각으로 의심되면 한 번 더 시도한 뒤 그래도
+    환각이면 원문 셀을 그대로 돌려준다.
+
+    로컬 모델은 temperature>0이라 같은 셀을 한 번 더 물어보면 정상적으로
+    번역되는 경우가 실사용에서 흔했다 — 그래도 환각이 반복되면, 표 구조를
+    깨뜨리는 다중 라인 결과를 그대로 끼워 넣는 것보다 셀을 미번역 상태로
+    남겨(has_residual_korean이 챕터 단위 재시도 대상으로 잡아줌) 사람이
+    나중에 확인할 수 있게 하는 편이 안전하다.
+    """
+    result = translate_fn(cell)
+    if _looks_like_cell_hallucination(cell, result):
+        result = translate_fn(cell)
+    if _looks_like_cell_hallucination(cell, result):
+        return cell
+    return result
+
+
 def translate_table_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str:
     """표 청크를 행의 셀 단위로 번역해 파이프(|) 구조를 코드가 그대로 보존한
     채 재조립한다.
@@ -182,7 +220,7 @@ def translate_table_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str
         # 짜지 않기 위해 재사용한다.
         cells = _TABLE_PROCESSOR._split_row(row)  # type: ignore[attr-defined]
         translated_cells = [
-            translate_fn(cell.strip()) if _HANGUL_RE.search(cell) else cell.strip()
+            _translate_cell(cell.strip(), translate_fn) if _HANGUL_RE.search(cell) else cell.strip()
             for cell in cells
         ]
         out_rows.append("| " + " | ".join(translated_cells) + " |")
@@ -491,13 +529,25 @@ def _write_translated_book_yaml(root: Path, out_dir: Path, target_language: str)
 
 
 def _build_prompt(chunk: str, target_language: str) -> str:
-    """마크다운 문법을 그대로 유지하라는 지시를 포함한 번역 프롬프트."""
+    """마크다운 문법을 그대로 유지하라는 지시를 포함한 번역 프롬프트.
+
+    "Preserve all Markdown syntax (headings, lists, links, emphasis, tables)"처럼
+    마크다운 요소를 나열해 지시하던 이전 문구는 exaone3.5:7.8b 같은 소형 로컬
+    모델에서 역효과를 냈다 — 실사용 실패 청크를 까보면 모델이 실제 원문을
+    번역하는 대신 그 나열된 카테고리(제목·리스트·링크·강조·표)의 "예시"를
+    스스로 지어내 돌려주는 사례가 반복 확인됐다(예: 표 셀 "코드 리뷰
+    체크리스트"(3단어) 하나에 가짜 "## Code Review Checklist" 체크리스트
+    전체를 창작해서 반환). 나열식 지시 대신 "이미 있는 것만 유지하고 새로
+    지어내지 마라"는 금지형 문구로 바꾸고, "예시·설명·코멘트를 추가하지
+    마라"를 명시적으로 덧붙여 이 환각 패턴을 직접 겨냥한다.
+    """
     target_name = {"ko": "Korean", "en": "English"}.get(target_language, target_language)
     return (
         f"Translate the following text to {target_name}. "
-        "Preserve all Markdown syntax (headings, lists, links, emphasis, tables) exactly as-is — "
-        "translate only the natural-language content. "
-        "Output only the translated Markdown, with no preamble or explanation.\n\n"
+        "Keep the Markdown formatting exactly as in the input — do not add, remove, or invent "
+        "any Markdown elements (headings, lists, links, tables, etc.) that are not already there. "
+        "Do not add examples, explanations, or commentary of your own — translate only what is given. "
+        "Output only the translated text, with no preamble.\n\n"
         f"{chunk}"
     )
 
