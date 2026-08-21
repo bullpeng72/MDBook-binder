@@ -7,21 +7,26 @@
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
-from mdbook_binder.manifest import BookConfig
+from mdbook_binder.manifest import BookConfig, TranslationConfig
 from mdbook_binder.translation import (
     _build_prompt,
     chunk_paragraphs,
     has_residual_korean,
+    is_table_chunk,
+    make_ollama_translate_fn,
     protect_blocks,
     reassemble_chunks,
     residual_korean_ratio,
     resolve_model_name,
     restore_blocks,
     translate_chapter,
+    translate_chunk,
     translate_corpus,
+    translate_table_chunk,
 )
 
 
@@ -201,6 +206,102 @@ class TestTranslateChapter:
         assert len(calls) == 1  # 재시도 없이 한 번만 호출됨
         assert out == translated
 
+    def test_table_chunk_is_translated_cell_by_cell(self):
+        """표만 있는 청크는 translate_fn에 청크 전체가 아니라 셀 텍스트가
+        하나씩 전달돼야 한다 — 표 전체를 한 번에 넘기면 로컬 소형 모델이
+        뒷부분 행을 통째로 빠뜨리는 실패가 실사용에서 반복 확인됐다."""
+        text = "| # | 문제 |\n|---|---|\n| A1 | 모호한 지시 |"
+        calls: list[str] = []
+
+        out = translate_chapter(
+            text, chunk_chars=1000, translate_fn=lambda s: calls.append(s) or s.upper()
+        )
+
+        assert "문제" in calls  # 청크 전체가 아니라 셀 하나씩 전달됨
+        assert text not in calls
+        assert "|---|---|" in out  # 구분선은 그대로 보존
+        assert "모호한 지시".upper() in out
+
+    def test_k2e_retry_applies_to_table_chunks_too(self):
+        """표 청크도 일반 청크와 동일하게 한글이 남으면 재시도·on_incomplete
+        대상이 돼야 한다."""
+        text = "| 헤더 |\n|---|\n| 내용 |"
+        incomplete: list[tuple[int, int]] = []
+
+        translate_chapter(
+            text,
+            chunk_chars=1000,
+            translate_fn=lambda s: s,  # 항상 원문 그대로(번역 실패 시뮬레이션)
+            target_language="en",
+            max_retries=1,
+            on_incomplete=lambda j, n: incomplete.append((j, n)),
+        )
+
+        assert incomplete == [(1, 1)]
+
+    def test_on_chunk_done_fires_once_per_chunk_in_order(self):
+        text = "\n\n".join(["a" * 60, "b" * 60, "c" * 60])
+        done: list[tuple[int, str]] = []
+
+        translate_chapter(
+            text,
+            chunk_chars=100,
+            translate_fn=lambda s: s,
+            on_chunk_done=lambda j, r: done.append((j, r)),
+        )
+
+        assert [j for j, _ in done] == [1, 2, 3]
+
+    def test_chunks_to_retranslate_skips_translate_fn_for_others(self):
+        """청크 단위 --resume의 핵심: chunks_to_retranslate에 없는 청크는
+        translate_fn을 다시 호출하지 않고 previous_chunks의 캐시를 그대로
+        쓴다."""
+        text = "\n\n".join(["a" * 60, "b" * 60, "c" * 60])
+        calls: list[str] = []
+
+        out = translate_chapter(
+            text,
+            chunk_chars=100,
+            translate_fn=lambda s: calls.append(s) or s.upper(),
+            previous_chunks=["A" * 60, "b" * 60, "C" * 60],  # 청크 2만 미완료였다고 가정
+            chunks_to_retranslate={2},
+        )
+
+        assert calls == ["b" * 60]  # 청크 1·3은 캐시 재사용, 청크 2만 다시 호출
+        assert out == "A" * 60 + "\n\n" + "B" * 60 + "\n\n" + "C" * 60
+
+    def test_skipped_chunk_still_fires_on_chunk_done_with_cached_result(self):
+        text = "\n\n".join(["a" * 60, "b" * 60])
+        done: dict[int, str] = {}
+
+        translate_chapter(
+            text,
+            chunk_chars=100,
+            translate_fn=lambda s: s.upper(),
+            previous_chunks=["cached one", "b" * 60],
+            chunks_to_retranslate={2},
+            on_chunk_done=lambda j, r: done.__setitem__(j, r),
+        )
+
+        assert done[1] == "cached one"  # 재번역 대상이 아니라 캐시 그대로
+        assert done[2] == "B" * 60
+
+    def test_previous_chunks_length_mismatch_falls_back_to_full_translation(self):
+        """previous_chunks가 이번 청킹 결과와 개수가 다르면(소스가 바뀌었거나
+        chunk_chars가 달라졌다는 뜻) 재사용을 포기하고 전부 새로 번역한다."""
+        text = "\n\n".join(["a" * 60, "b" * 60, "c" * 60])
+        calls: list[str] = []
+
+        translate_chapter(
+            text,
+            chunk_chars=100,
+            translate_fn=lambda s: calls.append(s) or s,
+            previous_chunks=["stale cache"],  # 청크 1개짜리 — 지금은 3개
+            chunks_to_retranslate={2},
+        )
+
+        assert len(calls) == 3  # 전부 새로 번역됨
+
 
 class TestResidualKorean:
     def test_pure_english_has_zero_ratio(self):
@@ -219,6 +320,108 @@ class TestResidualKorean:
     def test_above_threshold_is_flagged(self):
         text = "한글이 절반 이상인 문장입니다"
         assert has_residual_korean(text)
+
+
+class TestIsTableChunk:
+    def test_pure_table_is_detected(self):
+        chunk = "| # | 문제 | 담당 |\n|---|---|---|\n| A1 | 모호한 지시 | 방법론 |"
+        assert is_table_chunk(chunk)
+
+    def test_plain_prose_is_not_a_table(self):
+        assert not is_table_chunk("그냥 평범한 문단입니다.")
+
+    def test_table_merged_with_other_paragraph_is_excluded(self):
+        """chunk_paragraphs가 표를 다른 단락과 그리디하게 합쳤으면(청크 안에
+        빈 줄이 남아 있으면) 셀 단위 재조립이 안전하지 않으므로 제외한다."""
+        chunk = "| # | 문제 |\n|---|---|\n| A1 | 모호함 |\n\n뒤이은 산문 단락."
+        assert not is_table_chunk(chunk)
+
+
+class TestTranslateTableChunk:
+    def test_translates_only_cells_containing_korean(self):
+        chunk = "| # | 문제 | 담당 |\n|---|---|---|\n| A1 | 모호한 지시 | 방법론 |"
+        calls: list[str] = []
+
+        def fake(cell: str) -> str:
+            calls.append(cell)
+            return f"[EN:{cell}]"
+
+        out = translate_table_chunk(chunk, fake)
+
+        # 한글이 없는 셀("#", "A1")은 모델을 거치지 않는다
+        assert calls == ["문제", "담당", "모호한 지시", "방법론"]
+        assert (
+            out == "| # | [EN:문제] | [EN:담당] |\n"
+            "|---|---|---|\n"
+            "| A1 | [EN:모호한 지시] | [EN:방법론] |"
+        )
+
+    def test_separator_row_is_never_translated(self):
+        chunk = "| 헤더 |\n|---|\n| 내용 |"
+        calls: list[str] = []
+
+        translate_table_chunk(chunk, lambda c: calls.append(c) or c)
+
+        assert "---" not in calls
+
+    def test_preserves_column_count_per_row(self):
+        chunk = "| a | b | c |\n|---|---|---|\n| 하나 | 둘 | 셋 |"
+        out = translate_table_chunk(chunk, lambda c: c.upper())
+        rows = out.split("\n")
+        assert all(row.count("|") == 4 for row in rows)  # 3열 = 파이프 4개
+
+    def test_falls_back_to_translate_fn_when_not_a_table(self):
+        """방어적 폴백 — is_table_chunk()가 아닌 입력이 실수로 들어와도
+        조용히 깨지지 않고 기존 방식(전체를 translate_fn에 통째로)으로 처리."""
+        calls: list[str] = []
+        out = translate_table_chunk("그냥 산문.", lambda c: calls.append(c) or "번역됨")
+        assert calls == ["그냥 산문."]
+        assert out == "번역됨"
+
+
+class TestTranslateChunk:
+    def test_pure_table_chunk_skips_translate_fn_for_whole_block(self):
+        chunk = "| a | 문제 |\n|---|---|\n| 1 | 모호함 |"
+        calls: list[str] = []
+
+        translate_chunk(chunk, lambda c: calls.append(c) or c)
+
+        assert chunk not in calls  # 표 전체가 한 덩어리로 넘어가지 않음
+
+    def test_pure_prose_chunk_goes_through_translate_fn_unchanged(self):
+        chunk = "그냥 산문 한 단락."
+        calls: list[str] = []
+
+        out = translate_chunk(chunk, lambda c: calls.append(c) or c.upper())
+
+        assert calls == [chunk]
+        assert out == chunk.upper()
+
+    def test_table_followed_by_heading_in_same_chunk_splits_correctly(self):
+        """chunk_paragraphs가 표 뒤에 짧은 소제목을 그리디하게 같이 묶는 경우
+        (실제 실패 코퍼스에서 반복 확인된 패턴) — 표는 셀 단위로, 소제목은
+        translate_fn으로 각각 번역돼야 한다."""
+        chunk = "| a | 문제 |\n|---|---|\n| 1 | 모호함 |\n\n### 다음 절 제목"
+        calls: list[str] = []
+
+        out = translate_chunk(chunk, lambda c: calls.append(c) or f"[EN:{c}]")
+
+        assert "모호함" in calls  # 표는 셀 단위로 쪼개짐
+        assert "### 다음 절 제목" in calls  # 소제목은 그대로 한 번 넘어감
+        assert chunk not in calls  # 청크 전체가 통째로 넘어가는 경우는 없음
+        assert "|---|---|" in out
+        assert "[EN:### 다음 절 제목]" in out
+
+    def test_prose_paragraphs_around_a_table_stay_grouped(self):
+        """표가 아닌 연속된 단락들은 여전히 하나로 묶여 translate_fn 한 번에
+        전달돼야 한다 — 표 처리 도입으로 일반 산문의 호출 단위가 잘게
+        쪼개지면 안 된다."""
+        chunk = "첫 단락.\n\n둘째 단락.\n\n| a |\n|---|\n| 1 |"
+        calls: list[str] = []
+
+        translate_chunk(chunk, lambda c: calls.append(c) or c)
+
+        assert "첫 단락.\n\n둘째 단락." in calls  # 표가 아닌 두 단락은 한 번에 호출됨
 
 
 class TestTranslateCorpus:
@@ -404,6 +607,124 @@ class TestTranslateCorpus:
         assert marker.exists()
         assert json.loads(marker.read_text(encoding="utf-8"))["incomplete_chunks"] == [1]
 
+    def test_incomplete_marker_includes_chunk_cache_for_chunk_level_resume(self, tmp_path: Path):
+        """새 마커 포맷은 실패한 청크 번호뿐 아니라 청크별 번역 결과 캐시
+        (chunks)와 그때 쓰인 chunk_chars도 담아야 다음 --resume이 실패한
+        청크만 골라 재번역할 수 있다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "한글 원문입니다.\n")
+
+        translate_corpus(
+            root, out_dir, config=None, target_language="en", translate_fn=lambda s: s, chunk_chars=500
+        )
+
+        data = json.loads((out_dir / "chapter.md.incomplete.json").read_text(encoding="utf-8"))
+        assert data["chunk_chars"] == 500
+        assert data["chunks"] == ["한글 원문입니다.\n"]
+
+    def test_chunk_level_resume_only_retranslates_failed_chunks(self, tmp_path: Path):
+        """청크 단위 --resume의 핵심 시나리오: 마커에 캐시된 청크 중 실패했던
+        청크만 translate_fn을 다시 타고, 나머지는 캐시된 번역을 그대로 써서
+        최종 파일에 이어붙여야 한다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "\n\n".join(["a" * 60, "b" * 60, "c" * 60]))
+        out_dir.mkdir(parents=True)
+        # dest 파일 자체의 내용은 resume 판단에 쓰이지 않는다(마커의 chunks가
+        # 진짜 캐시다) — 존재 여부만 --resume 진입 조건으로 확인된다.
+        (out_dir / "chapter.md").write_text("이전 실행의 (일부 미완료) 결과", encoding="utf-8")
+        (out_dir / "chapter.md.incomplete.json").write_text(
+            json.dumps(
+                {
+                    "incomplete_chunks": [2],
+                    "total_chunks": 3,
+                    "chunk_chars": 100,
+                    "chunks": ["cached1", "b" * 60, "cached3"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        calls: list[str] = []
+
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: calls.append(s) or s.upper(),
+            chunk_chars=100,
+            resume=True,
+        )
+
+        assert calls == ["b" * 60]  # 청크 1·3은 재번역하지 않음
+        assert (
+            out_dir / "chapter.md"
+        ).read_text(encoding="utf-8") == "cached1\n\n" + ("b" * 60).upper() + "\n\ncached3"
+        # 이번엔 재번역한 청크가 깔끔히 통과했으므로 마커는 정리된다
+        assert not (out_dir / "chapter.md.incomplete.json").exists()
+
+    def test_chunk_level_resume_falls_back_when_chunk_chars_changed(self, tmp_path: Path):
+        """마커에 캐시된 chunk_chars가 이번 실행과 다르면 청킹 경계 자체가
+        달라져 부분 재사용이 안전하지 않으므로 챕터 전체를 다시 번역한다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "\n\n".join(["a" * 60, "b" * 60, "c" * 60]))
+        out_dir.mkdir(parents=True)
+        (out_dir / "chapter.md").write_text("stale", encoding="utf-8")
+        (out_dir / "chapter.md.incomplete.json").write_text(
+            json.dumps(
+                {
+                    "incomplete_chunks": [2],
+                    "total_chunks": 3,
+                    "chunk_chars": 999,  # 이번 실행(100)과 불일치
+                    "chunks": ["cached1", "cached2", "cached3"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        calls: list[str] = []
+
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: calls.append(s) or s,
+            chunk_chars=100,
+            resume=True,
+        )
+
+        assert len(calls) == 3  # chunk_chars 불일치라 전부 새로 번역
+
+    def test_chunk_level_resume_falls_back_for_pre_0_5_4_marker_without_chunks(
+        self, tmp_path: Path
+    ):
+        """chunks 필드가 없는 구버전 마커(0.5.3 이전)를 만나도 깨지지 않고
+        전체 재번역으로 안전하게 폴백해야 한다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "\n\n".join(["a" * 60, "b" * 60, "c" * 60]))
+        out_dir.mkdir(parents=True)
+        (out_dir / "chapter.md").write_text("stale", encoding="utf-8")
+        (out_dir / "chapter.md.incomplete.json").write_text(
+            json.dumps({"incomplete_chunks": [2], "total_chunks": 3}),  # chunks 필드 없음
+            encoding="utf-8",
+        )
+        calls: list[str] = []
+
+        translate_corpus(
+            root,
+            out_dir,
+            config=None,
+            target_language="en",
+            translate_fn=lambda s: calls.append(s) or s,
+            chunk_chars=100,
+            resume=True,
+        )
+
+        assert len(calls) == 3
+
     def test_resume_skips_chapters_already_present_in_out_dir(self, tmp_path: Path):
         """--resume은 중단 후 재실행 시 이미 번역된 챕터를 재번역하지 않아야
         한다 — 대용량 코퍼스에서 중간 실패 시 처음부터 다시 돌리지 않게 한다."""
@@ -463,6 +784,45 @@ def test_build_prompt_instructs_markdown_preservation_and_includes_chunk():
     prompt = _build_prompt("hello world", "ko")
     assert "hello world" in prompt
     assert "Markdown" in prompt
+
+
+class _FakeOllamaClient:
+    """실제 서버 없이 make_ollama_translate_fn()을 검증하기 위한 가짜
+    ollama.Client — list()/generate() 호출만 흉내낸다."""
+
+    def __init__(self, host: str, timeout: int) -> None:
+        self.host = host
+        self.timeout = timeout
+        self.generate_calls: list[dict] = []
+
+    def list(self):
+        return SimpleNamespace(models=[SimpleNamespace(model="exaone3.5:7.8b")])
+
+    def generate(self, *, model: str, prompt: str, options: dict | None = None):
+        self.generate_calls.append({"model": model, "prompt": prompt, "options": options})
+        return SimpleNamespace(response="번역 결과")
+
+
+class TestMakeOllamaTranslateFn:
+    def test_passes_temperature_and_num_ctx_as_generate_options(self, monkeypatch):
+        """generate()에 options로 temperature/num_ctx를 명시 전달해야 한다 —
+        안 넘기면 모델 Modelfile 기본값(exaone3.5:7.8b는 temperature 1)과
+        서버 기본 컨텍스트 창이 쓰여, 표처럼 밀도 높은 청크에서 뒤쪽이
+        잘리거나 모델이 지시를 놓치는 실패로 이어졌다."""
+        created: list[_FakeOllamaClient] = []
+
+        def _fake_client(host: str, timeout: int) -> _FakeOllamaClient:
+            client = _FakeOllamaClient(host, timeout)
+            created.append(client)
+            return client
+
+        monkeypatch.setattr("ollama.Client", _fake_client)
+
+        cfg = TranslationConfig(model="exaone3.5:7.8b", temperature=0.1, num_ctx=16384)
+        translate_fn = make_ollama_translate_fn(cfg, "en")
+        translate_fn("안녕하세요")
+
+        assert created[0].generate_calls[0]["options"] == {"temperature": 0.1, "num_ctx": 16384}
 
 
 class TestResolveModelName:

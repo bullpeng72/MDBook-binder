@@ -558,8 +558,10 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
 | `--host TEXT` | Ollama 서버 주소 | `book.yaml`의 `translation.host`, 없으면 `http://localhost:11434` |
 | `--timeout INTEGER` | 청크 1건당 번역 타임아웃(초) | `book.yaml`의 `translation.timeout`, 없으면 300 |
 | `--chunk-chars INTEGER` | 청크 최대 글자수 | `book.yaml`의 `translation.chunk_chars`, 없으면 2000 |
+| `--temperature FLOAT` | Ollama 샘플링 temperature | `book.yaml`의 `translation.temperature`, 없으면 0.2 |
+| `--num-ctx INTEGER` | Ollama 컨텍스트 창 크기(토큰) | `book.yaml`의 `translation.num_ctx`, 없으면 8192 |
 | `--check-only` | 실제 번역 없이 Ollama 연결·모델 설치 상태만 확인 | — |
-| `--resume` | `OUT_DIR`에 이미 있는 챕터는 건너뜀(단, 미완료 마커가 있으면 자동 재번역) | 끔(항상 재번역) |
+| `--resume` | `OUT_DIR`에 이미 있는 챕터는 건너뜀(단, 미완료 마커가 있으면 실패했던 청크만 자동 재번역) | 끔(항상 재번역) |
 
 **동작**
 
@@ -567,6 +569,11 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
   번역하고, `OUT_DIR`에 동일한 디렉토리 구조로 미러링한다(`exclude` 규칙도
   그대로 적용된다).
 - 코드·Mermaid·raw-HTML 블록은 번역하지 않고 원문 그대로 보존한다.
+- **마크다운 표는 행의 셀 단위로 번역한다** — 표 청크 전체를 한 번에
+  모델에 넘기면 로컬 소형 모델이 뒤쪽 행을 통째로 빠뜨리거나 파이프(`|`)
+  구조를 깨뜨리는 사례가 실사용에서 반복 확인됐다. 셀 텍스트만 개별로
+  모델에 보내고 표 구조 자체는 코드가 그대로 보존한다(구분선 행과 한글이
+  없는 셀은 모델을 거치지 않는다).
 - **`k2e`(한→영)는 청크마다 번역 결과에 잔여 한글이 남아있는지 자동
   검증하고 필요하면 재시도한다** — 자세한 동작은 아래 [k2e 번역
   완전성 검증](#k2e-번역-완전성-검증--잔여-한글-자동-재시도) 참고.
@@ -580,14 +587,15 @@ mdbook-binder translate <코퍼스_루트> <출력_디렉토리> --direction k2e
 - **`--resume`으로 중단 후 이어할 수 있다** — `OUT_DIR`에 이미 결과
   파일이 있는 챕터는 재번역하지 않고 건너뛴다. 네트워크/타임아웃으로
   중간에 실패했을 때 같은 명령을 `--resume`으로 다시 실행하면 처음부터
-  다시 돌리지 않아도 된다. 챕터(파일) 단위로만 판단하므로, 챕터 하나가
-  절반만 번역된 채 중단됐다면 그 챕터는(아직 파일이 없으므로) 처음부터
-  다시 번역된다. **단, 재시도 후에도 청크가 한글로 남았던 챕터(k2e)는
-  `OUT_DIR`에 `<파일명>.incomplete.json` 마커가 남아있어 "이미 있음"으로
-  건너뛰지 않고 자동으로 삭제 후 재번역한다** — 같은 코퍼스에
-  `--resume`을 반복 실행할수록(LLM 출력이 비결정적이므로) 미완료 챕터
-  수가 점차 줄어드는 방향으로 수렴한다. e2k는 청크 검증 신호가 없어
-  이 자동 재번역 대상에 포함되지 않는다.
+  다시 돌리지 않아도 된다. **단, 재시도 후에도 청크가 한글로 남았던
+  챕터(k2e)는 `OUT_DIR`에 `<파일명>.incomplete.json` 마커가 남아있어
+  "이미 있음"으로 건너뛰지 않고, 그 마커에 캐시된 청크별 번역 결과 중
+  실패했던 청크만 다시 번역한다(청크 단위 이어하기 — 이미 통과한 청크는
+  다시 모델에 묻지 않아 더 빠르고, 통과한 청크가 재시도 중 비결정성으로
+  새로 실패하는 일도 없다)** — 같은 코퍼스에 `--resume`을 반복
+  실행할수록(LLM 출력이 비결정적이므로) 미완료 청크 수가 점차 줄어드는
+  방향으로 수렴한다. e2k는 청크 검증 신호가 없어 이 자동 재번역 대상에
+  포함되지 않는다.
 
 `book.yaml`에 기본값을 지정해둘 수도 있다(CLI 옵션이 이 값보다 우선한다):
 
@@ -597,6 +605,8 @@ translation:
   host: http://localhost:11434
   timeout: 300
   chunk_chars: 2000
+  temperature: 0.2
+  num_ctx: 8192
 ```
 
 ### k2e 번역 완전성 검증 — 잔여 한글 자동 재시도
@@ -640,14 +650,22 @@ translation:
 재시도만 반복하게 된다.
 
 **검증은 번역 실행 중에만 동작하고, 결과는 `.incomplete.json` 마커로
-`OUT_DIR`에 남는다.** 이 마커가 있는 챕터는 이후 `--resume` 실행에서
-자동으로 삭제·재번역된다(위 [`--resume`](#로컬-llm-번역--translate) 참고) —
-즉 같은 코퍼스를 `--resume`으로 반복 돌리는 것만으로 미완료 챕터가 점차
-줄어든다. 다만 **마커는 이 버전(0.5.3) 이후 실행에만 만들어진다** — 그
-이전 버전으로 이미 번역해둔 `OUT_DIR`에는 마커가 없으므로, `--resume`이
-그 결과물을 "이미 있음"으로 계속 건너뛴다. 이런 결과물은 잔여 한글이
-의심되는 챕터 파일을 `OUT_DIR`에서 직접 지운 뒤 `--resume`으로
-재실행하거나, `--resume` 없이 `translate`를 다시 실행해야 한다.
+`OUT_DIR`에 남는다.** 이 마커는 실패한 청크 번호뿐 아니라 그 시점의
+청크별 번역 결과 전체와 청킹에 쓰인 `chunk_chars`도 함께 담는다. 이 마커가
+있는 챕터는 이후 `--resume` 실행에서 **실패했던 청크만** 다시 번역하고
+나머지는 캐시된 결과를 그대로 이어붙인다(위 [`--resume`](#로컬-llm-번역--translate)
+참고) — 즉 같은 코퍼스를 `--resume`으로 반복 돌리는 것만으로 미완료
+청크가 점차 줄어든다. `--chunk-chars`를 이전 실행과 다르게 주면(청킹
+경계 자체가 달라지므로) 캐시를 안전하게 재사용할 수 없어 그 챕터는
+처음부터 다시 번역된다.
+
+다만 **청크별 캐시(`chunks` 필드)는 0.5.4 이후 실행에만 마커에 담긴다**
+— 0.5.3의 마커(청크 번호만 기록, `chunks` 필드 없음)나 그보다 이전
+버전으로 이미 번역해둔 `OUT_DIR`(마커 자체가 없음)을 만나면
+챕터 전체를 처음부터 다시 번역하는 것으로 안전하게 폴백한다. 이런
+결과물은 잔여 한글이 의심되는 챕터 파일을 `OUT_DIR`에서 직접 지운 뒤
+`--resume`으로 재실행하거나, `--resume` 없이 `translate`를 다시
+실행해야 한다.
 
 ---
 
@@ -733,7 +751,7 @@ mdbook-binder build html ~/corpus-ko
 
 ```bash
 pip install -e ".[dev,pdf,editor,translate]"
-pytest tests/ -q      # 298개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 14 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 100 + translation 45 + server 12)
+pytest tests/ -q      # 320개 테스트 (cli 17 + manifest 20 + chapter_split 9 + html_book 18 + check 14 + editor 14 + mermaid_prerender 6 + mermaid_wrap 12 + theme 8 + pdf_book 23 + pdf_import 100 + translation 67 + server 12)
 ruff check src tests
 ```
 
@@ -800,6 +818,24 @@ ruff check src tests
 ---
 
 ## 변경이력
+
+### 0.5.4 (2026-08-21) — 표 셀 단위 번역 + Ollama 옵션 조정 + 청크 단위 --resume
+
+- **fix**: 마크다운 표가 포함된 청크를 통째로 모델에 넘기면 뒤쪽 행이
+  빠지거나 파이프(`|`) 구조가 깨지던 문제 수정 — 표는 행의 셀 단위로
+  나눠 번역하고 파이프 구조는 코드가 그대로 보존한다(구분선 행·한글이
+  없는 셀은 모델을 거치지 않음)
+- **feat**: `translate`에 `--temperature`/`--num-ctx` 옵션(및 `book.yaml`의
+  `translation.temperature`/`translation.num_ctx`) 추가 — Ollama
+  `generate()` 호출에 명시 전달해 모델 기본값(temperature 1, 서버 기본
+  컨텍스트 창)으로 인한 과도한 무작위성·컨텍스트 잘림을 줄인다(기본값:
+  temperature 0.2, num_ctx 8192)
+- **feat**: `--resume`이 챕터 전체가 아니라 **실패한 청크만** 재번역하도록
+  개선 — `.incomplete.json` 마커에 그 시점의 청크별 번역 결과 캐시를
+  함께 저장해, 다음 `--resume` 실행은 이미 통과한 청크는 그대로 재사용하고
+  실패했던 청크만 다시 번역한다(0.5.3 이전 마커는 캐시가 없어 안전하게
+  챕터 전체 재번역으로 폴백)
+- 회귀 테스트 22건 추가(총 320개)
 
 ### 0.5.3 (2026-08-20) — translate --resume 미완료 청크 자동 재번역
 

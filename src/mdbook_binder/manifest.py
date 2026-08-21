@@ -80,6 +80,15 @@ class TranslationConfig:
     host: str = "http://localhost:11434"
     timeout: int = 300
     chunk_chars: int = 2000
+    # Ollama generate()에 options로 명시 전달할 값. 아무것도 안 넘기면 모델의
+    # Modelfile 기본값이 그대로 쓰이는데, exaone3.5:7.8b는 temperature 1(매우
+    # 무작위)이 기본이고 num_ctx도 지정돼 있지 않다(서버 기본 컨텍스트 창은
+    # 보통 2048~4096 토큰) — 표처럼 반복·구조가 밀도 높은 청크에서 뒤쪽 행이
+    # 통째로 잘리거나 모델이 딴 얘기를 하는 실패가 실사용에서 반복 확인됐다.
+    # 낮은 temperature로 무작위성을 줄이고 넉넉한 num_ctx로 청크+프롬프트+
+    # 출력이 컨텍스트 창에 안 걸리게 한다.
+    temperature: float = 0.2
+    num_ctx: int = 8192
 
 
 @dataclass

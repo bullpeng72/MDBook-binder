@@ -30,6 +30,7 @@ import re
 from collections.abc import Callable
 from pathlib import Path
 
+import markdown as md_lib
 import yaml
 
 from mdbook_binder import render
@@ -131,6 +132,103 @@ def has_residual_korean(text: str, *, threshold: float = _RESIDUAL_KOREAN_THRESH
     return residual_korean_ratio(text) > threshold
 
 
+# render.py가 HTML 렌더링에 이미 쓰는 것과 같은 "tables" 확장을 그대로 재사용한다
+# — 표 인식/셀 분리 규칙을 translation.py에서 정규식으로 새로 짜면 render.py와
+# 판정이 갈릴 위험이 있고, 인라인 코드 안의 `|`를 이스케이프까지 고려해 안전하게
+# 셀 경계를 찾는 로직(_split_row)을 직접 재구현하는 것도 불필요하다. 파서 자체가
+# 상태를 갖는 인스턴스라(test()가 self.border/self.separator를 채워야 다음
+# _split_row 호출이 맞게 동작함) 모듈 레벨에서 한 번만 만들어 공유한다.
+_TABLE_PROCESSOR = md_lib.Markdown(extensions=["tables"]).parser.blockprocessors["table"]
+
+
+def is_table_chunk(chunk: str) -> bool:
+    """청크 전체가 마크다운 표 블록 하나로만 이뤄져 있는지 판정한다(순수 함수).
+
+    chunk_paragraphs()는 여러 원본 단락을 "\\n\\n"으로 그리디하게 합칠 수 있다.
+    표가 다른 단락과 섞여 청크 안에 빈 줄이 남아 있으면(표만 있는 게 아니면)
+    행 단위 재조립이 안전하지 않으므로 표 전용 처리 대상에서 제외하고 기존
+    방식(청크 전체를 translate_fn에 통째로 넘김)으로 넘긴다.
+    """
+    if "\n\n" in chunk:
+        return False
+    # test()의 타입 스텁은 parent: Element를 요구하지만 실제 구현은 이 인자를
+    # 쓰지 않는다(render.py가 실제 렌더링에 쓰는 것과 동일한 인스턴스로 직접
+    # 확인함) — None을 넘겨도 안전하다.
+    return bool(_TABLE_PROCESSOR.test(None, chunk))  # type: ignore[arg-type]
+
+
+def translate_table_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str:
+    """표 청크를 행의 셀 단위로 번역해 파이프(|) 구조를 코드가 그대로 보존한
+    채 재조립한다.
+
+    표 전체를 청크 하나로 통째로 로컬 소형 모델에 넘기면 뒤쪽 행을 통째로
+    빠뜨리거나 파이프 구조 자체를 깨뜨리는 사례가 실사용에서 반복 확인됐다
+    (§translate_chapter docstring 참고) — 마크다운 표 문법을 모델이 그대로
+    지켜주길 기대하는 대신, 셀 텍스트만 개별로 모델에 보내고 파이프로
+    재조립하는 일은 코드가 맡는다. 구분선 행(|---|---|)과 한글이 없는 셀
+    (숫자·기호·영문 전용 — 참조 번호 `§14`, 체크마크 등)은 번역할 내용이
+    없으므로 모델을 거치지 않고 그대로 둔다.
+    """
+    if not _TABLE_PROCESSOR.test(None, chunk):  # type: ignore[arg-type]
+        return translate_fn(chunk)  # 방어적 폴백 — 호출부는 항상 is_table_chunk()로 먼저 확인한다
+
+    out_rows: list[str] = []
+    for i, row in enumerate(chunk.split("\n")):
+        if i == 1:
+            out_rows.append(row)  # 구분선은 셀이 아니라 번역하지 않고 그대로 유지
+            continue
+        # _split_row는 밑줄로 시작하는 내부 메서드라 타입 스텁에 없지만, 인라인
+        # 코드 속 이스케이프된 `|`까지 안전하게 처리하는 로직을 정규식으로 새로
+        # 짜지 않기 위해 재사용한다.
+        cells = _TABLE_PROCESSOR._split_row(row)  # type: ignore[attr-defined]
+        translated_cells = [
+            translate_fn(cell.strip()) if _HANGUL_RE.search(cell) else cell.strip()
+            for cell in cells
+        ]
+        out_rows.append("| " + " | ".join(translated_cells) + " |")
+    return "\n".join(out_rows)
+
+
+def translate_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str:
+    """청크 하나를 번역한다 — 표 단락은 translate_table_chunk로, 나머지
+    산문 단락은 (연속된 것끼리 묶어) translate_fn으로 넘긴다.
+
+    chunk_paragraphs()는 원본 단락을 "\\n\\n" 기준 그리디하게 묶으므로,
+    표 뒤에 짧은 소제목·문단이 그대로 이어붙어 한 청크가 되는 경우가
+    실사용 코퍼스에서 흔했다(예: 표 바로 뒤 "### 그룹 B ..." 같은 다음
+    절 제목). is_table_chunk()가 청크 안에 빈 줄이 하나라도 있으면 표
+    전용 처리를 포기하던 예전 방식은 바로 이 흔한 경우를 전부 놓쳤다 —
+    그래서 여기서는 청크를 원래 단락 단위로 다시 쪼개 표 단락만 골라
+    처리하고, 나머지는 원래 묶여 있던 순서·인접 관계를 그대로 살려
+    (표가 아닌 단락들끼리는 계속 하나로 묶어) translate_fn을 호출한다.
+    """
+    paragraphs = chunk.split("\n\n")
+    if len(paragraphs) == 1:
+        return (
+            translate_table_chunk(chunk, translate_fn)
+            if is_table_chunk(chunk)
+            else translate_fn(chunk)
+        )
+
+    parts: list[str] = []
+    prose_run: list[str] = []
+
+    def _flush_prose() -> None:
+        if prose_run:
+            parts.append(translate_fn("\n\n".join(prose_run)))
+            prose_run.clear()
+
+    for para in paragraphs:
+        if is_table_chunk(para):
+            _flush_prose()
+            parts.append(translate_table_chunk(para, translate_fn))
+        else:
+            prose_run.append(para)
+    _flush_prose()
+
+    return "\n\n".join(parts)
+
+
 def translate_chapter(
     text: str,
     chunk_chars: int,
@@ -140,13 +238,20 @@ def translate_chapter(
     max_retries: int = _MAX_RETRIES,
     on_chunk_start: Callable[[int, int], None] | None = None,
     on_incomplete: Callable[[int, int], None] | None = None,
+    on_chunk_done: Callable[[int, str], None] | None = None,
+    previous_chunks: list[str] | None = None,
+    chunks_to_retranslate: set[int] | None = None,
 ) -> str:
     """챕터 하나를 번역한다 — 코드/mermaid/raw-HTML을 보호한 뒤 청크 단위로
     translate_fn을 호출하고 재조립·복원한다.
 
     on_chunk_start(j, n)은 청크(1-indexed) 번역을 시작하기 직전 호출된다 —
     로컬 LLM은 청크 하나에도 수십 초가 걸릴 수 있어, 호출부(translate_corpus)가
-    이 훅으로 진행 상황을 찍지 않으면 멈춘 것처럼 보이기 쉽다.
+    이 훅으로 진행 상황을 찍지 않으면 멈춘 것처럼 보이기 쉽다. on_chunk_done(j,
+    result)는 청크 하나의 최종 결과(마스킹된 채로 — restore_blocks 이전)가
+    정해질 때마다 호출된다(재사용으로 건너뛴 청크 포함, 항상 i=1..총
+    청크수 순서로 한 번씩) — 호출부가 청크별 결과를 다음 --resume에
+    캐시해두려 할 때 쓴다(§translate_corpus의 마커 파일 참고).
 
     target_language="en"(k2e)일 때만 has_residual_korean()으로 각 청크
     결과를 검증하고, 여전히 한글이 남아있으면 translate_fn을 최대
@@ -158,29 +263,61 @@ def translate_chapter(
     실패하면 on_incomplete(j, n)를 호출해 호출부가 어떤 청크가 여전히
     한글로 남았는지 알 수 있게 한다 — 조용히 안 좋은 출력을 그대로
     통과시키던 이전 동작과 달리, 최소한 사람이 나중에 찾아볼 수 있게 한다.
+
+    청크 안에 마크다운 표 단락이 있으면(translate_chunk 참고) 청크 전체를
+    translate_fn에 통째로 넘기는 대신 표 단락만 행의 셀 단위로 나눠
+    번역한다 — 표는 밀도 높은 반복 구조라 로컬 소형 모델이 청크 전체를
+    한 번에 번역할 때 뒤쪽 행을 통째로 빠뜨리거나 파이프 구조를 깨뜨리는
+    실패가 실사용에서 반복 확인됐다.
+
+    previous_chunks/chunks_to_retranslate는 청크 단위 --resume을 위한
+    것이다: previous_chunks가 이번에 계산된 청크 개수와 정확히 같은
+    길이면(같은 소스 텍스트·chunk_chars로 이전에 한 번 청킹된 결과라는
+    뜻 — 다르면 청크 경계 자체가 달라져 재사용이 안전하지 않으므로 무시
+    하고 전부 새로 번역한다) 그 값을 초기 translated 리스트로 삼는다.
+    chunks_to_retranslate가 주어지면 그 안에 있는 청크(1-indexed)만
+    translate_fn을 다시 타고, 나머지는 이전 결과를 그대로 재사용해
+    on_chunk_start도 호출하지 않는다(이미 성공한 청크를 매번 다시
+    모델에 물어보면 비결정성 때문에 오히려 새로 실패할 수도 있고,
+    무엇보다 낭비다).
     """
     masked, blocks = protect_blocks(text)
     chunks = chunk_paragraphs(masked, chunk_chars)
-
-    translated: list[str] = []
     total = len(chunks)
+
+    if previous_chunks is not None and len(previous_chunks) == total:
+        reuse_previous = True
+        translated: list[str] = list(previous_chunks)
+    else:
+        reuse_previous = False
+        translated = [""] * total
+
     for i, chunk in enumerate(chunks, start=1):
+        if reuse_previous and chunks_to_retranslate is not None and i not in chunks_to_retranslate:
+            if on_chunk_done:
+                on_chunk_done(i, translated[i - 1])
+            continue
+
         if on_chunk_start:
             on_chunk_start(i, total)
         if not chunk.strip():
-            translated.append(chunk)
+            translated[i - 1] = chunk
+            if on_chunk_done:
+                on_chunk_done(i, chunk)
             continue
 
-        result = translate_fn(chunk)
+        result = translate_chunk(chunk, translate_fn)
         if target_language == "en" and has_residual_korean(result):
             for _ in range(max_retries):
-                result = translate_fn(chunk)
+                result = translate_chunk(chunk, translate_fn)
                 if not has_residual_korean(result):
                     break
             else:
                 if on_incomplete:
                     on_incomplete(i, total)
-        translated.append(result)
+        translated[i - 1] = result
+        if on_chunk_done:
+            on_chunk_done(i, result)
 
     return restore_blocks(reassemble_chunks(translated), blocks)
 
@@ -209,13 +346,22 @@ def translate_corpus(
     resume=True면 out_dir에 이미 결과 파일이 있는 챕터는 건너뛴다 — 대용량
     코퍼스 번역 중 네트워크/타임아웃으로 중간에 실패했을 때, 같은 명령을
     `--resume`으로 다시 실행하면 이미 끝난 챕터를 재번역하지 않고 이어서
-    진행할 수 있다. 챕터(파일) 단위로만 판단하되, 청크 하나라도 재시도 후에도
-    미완료였던 챕터는 dest 옆에 `<파일명>.incomplete.json` 마커를 남긴다 —
-    다음 --resume 실행에서 마커가 있는 챕터는 "이미 있다"고 건너뛰지 않고
-    자동으로 삭제 후 재번역한다. LLM 출력이 비결정적이라 같은 챕터를
-    --resume으로 반복 실행할수록 미완료 챕터 수가 점차 줄어드는 것이
-    기대 동작이다(수렴 보장은 없음 — 특정 청크가 매 시도 실패할 수도 있다).
-    이 마커는 on_incomplete가 실제로 호출될 때만 쓰이므로, 현재는 k2e
+    진행할 수 있다. 청크 하나라도 재시도 후에도 미완료였던 챕터는 dest
+    옆에 `<파일명>.incomplete.json` 마커를 남긴다 — 이 마커는 실패한
+    청크 번호뿐 아니라 그 시점의 청크별 번역 결과 전체(`chunks`)와
+    청킹에 쓰인 `chunk_chars`도 함께 담는다. 다음 --resume 실행은 이
+    마커를 읽어 **실패했던 청크만** 다시 번역하고 나머지는 캐시된 결과를
+    그대로 재사용한다(§translate_chapter의 previous_chunks/
+    chunks_to_retranslate 참고) — 파일 전체를 매번 처음부터 다시 번역하던
+    이전 방식은 이미 통과한 청크까지 매번 새로 무작위 샘플링해 오히려
+    새로 실패하는 청크가 생기기도 했다. 캐시된 `chunk_chars`가 이번 실행의
+    유효 chunk_chars와 다르면(청킹 경계 자체가 달라져 재사용이 안전하지
+    않으므로) 통째로 무시하고 챕터 전체를 처음부터 다시 번역한다 — 0.5.3
+    이전 버전이 남긴 마커(chunks 필드 자체가 없음)도 같은 경로로 전체
+    재번역된다. LLM 출력이 비결정적이라 같은 챕터를 --resume으로 반복
+    실행할수록 미완료 청크 수가 점차 줄어드는 것이 기대 동작이다(수렴
+    보장은 없음 — 특정 청크가 매 시도 실패할 수도 있다). 이 마커는
+    on_incomplete가 실제로 호출될 때만 쓰이므로, 현재는 k2e
     (has_residual_korean 검증이 있는 방향)에서만 의미 있게 동작한다 — e2k는
     청크 검증 자체가 없어(§translate_chapter docstring) 마커가 생기지 않고,
     기존과 동일하게 파일 존재 여부만으로 건너뛴다.
@@ -234,11 +380,25 @@ def translate_corpus(
         dest = out_dir / rel
         marker = _incomplete_marker_path(dest)
 
+        previous_chunks: list[str] | None = None
+        chunks_to_retranslate: set[int] | None = None
+
         if resume and dest.exists():
             if marker.exists():
-                print(f"\U0001f501 [{i}/{total}] {rel} — 이전 실행에서 미완료 청크가 남아 재번역")
-                dest.unlink()
-                marker.unlink()
+                marker_data = json.loads(marker.read_text(encoding="utf-8"))
+                cached_chunks = marker_data.get("chunks")
+                incomplete = marker_data.get("incomplete_chunks", [])
+                if cached_chunks is not None and marker_data.get("chunk_chars") == effective_chunk_chars:
+                    previous_chunks = cached_chunks
+                    chunks_to_retranslate = set(incomplete)
+                    print(
+                        f"\U0001f501 [{i}/{total}] {rel} — 이전 실행에서 미완료였던 청크 {incomplete}만 재번역"
+                    )
+                else:
+                    # chunks 필드가 없는 구버전(0.5.3 이전) 마커이거나 chunk_chars가
+                    # 바뀌어 청킹 경계가 달라졌다 — 부분 재사용이 안전하지 않으므로
+                    # 챕터 전체를 처음부터 다시 번역한다(아래 공통 경로로 그대로 진행).
+                    print(f"\U0001f501 [{i}/{total}] {rel} — 이전 실행에서 미완료 청크가 남아 재번역")
             else:
                 print(f"⏭️  [{i}/{total}] {rel} — 이미 번역됨, 건너뜀")
                 continue
@@ -247,14 +407,16 @@ def translate_corpus(
 
         text = chap.path.read_text(encoding="utf-8")
         incomplete_chunks: list[int] = []
-        chunk_total_holder = [0]
+        translated_chunks: list[str] = []
 
-        def _on_chunk_start(j: int, n: int, _holder: list[int] = chunk_total_holder) -> None:
-            _holder[0] = n
+        def _on_chunk_start(j: int, n: int) -> None:
             print(f"  청크 {j}/{n} 번역 중...")
 
         def _on_incomplete(j: int, n: int, _sink: list[int] = incomplete_chunks) -> None:
             _sink.append(j)
+
+        def _on_chunk_done(j: int, result: str, _sink: list[str] = translated_chunks) -> None:
+            _sink.append(result)
 
         out_text = translate_chapter(
             text,
@@ -263,6 +425,9 @@ def translate_corpus(
             target_language=target_language,
             on_chunk_start=_on_chunk_start,
             on_incomplete=_on_incomplete,
+            on_chunk_done=_on_chunk_done,
+            previous_chunks=previous_chunks,
+            chunks_to_retranslate=chunks_to_retranslate,
         )
 
         dest.parent.mkdir(parents=True, exist_ok=True)
@@ -275,7 +440,9 @@ def translate_corpus(
                 json.dumps(
                     {
                         "incomplete_chunks": incomplete_chunks,
-                        "total_chunks": chunk_total_holder[0],
+                        "total_chunks": len(translated_chunks),
+                        "chunk_chars": effective_chunk_chars,
+                        "chunks": translated_chunks,
                     },
                     ensure_ascii=False,
                 ),
@@ -365,6 +532,12 @@ def make_ollama_translate_fn(cfg: TranslationConfig, target_language: str) -> Ca
     실제 서버에 있는 정확한 이름으로 바꿔 쓴다 — check_ollama()가 "완화
     매칭으로 뭔가는 설치돼 있다"고 판정해 사전 점검을 통과시켜놓고, 정작
     호출은 서버에 없는 이름 그대로 나가 404로 실패하는 불일치를 막는다.
+
+    generate()에 options로 cfg.temperature/cfg.num_ctx를 명시 전달한다 —
+    안 넘기면 모델의 Modelfile 기본값(exaone3.5:7.8b는 temperature 1)과
+    서버의 기본 컨텍스트 창이 쓰이는데, 표처럼 밀도 높은 청크에서 이게
+    청크 뒷부분이 잘리거나 모델이 지시를 놓치는 실패로 이어지는 사례가
+    실사용에서 반복 확인됐다(§TranslationConfig 참고).
     """
     from ollama import Client
 
@@ -383,7 +556,9 @@ def make_ollama_translate_fn(cfg: TranslationConfig, target_language: str) -> Ca
 
     def _translate(chunk: str) -> str:
         response = client.generate(
-            model=resolved_model, prompt=_build_prompt(chunk, target_language)
+            model=resolved_model,
+            prompt=_build_prompt(chunk, target_language),
+            options={"temperature": cfg.temperature, "num_ctx": cfg.num_ctx},
         )
         return (response.response or "").strip()
 

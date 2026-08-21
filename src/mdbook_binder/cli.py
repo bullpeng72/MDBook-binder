@@ -434,6 +434,20 @@ def import_cmd(
     help="청크 최대 글자수 오버라이드",
 )
 @click.option(
+    "--temperature",
+    "temperature_override",
+    type=float,
+    default=None,
+    help="Ollama 샘플링 temperature 오버라이드 (기본: 0.2 또는 book.yaml)",
+)
+@click.option(
+    "--num-ctx",
+    "num_ctx_override",
+    type=int,
+    default=None,
+    help="Ollama 컨텍스트 창 크기(토큰) 오버라이드 (기본: 8192 또는 book.yaml)",
+)
+@click.option(
     "--check-only",
     is_flag=True,
     default=False,
@@ -453,6 +467,8 @@ def translate_cmd(
     host_override: str | None,
     timeout_override: int | None,
     chunk_chars_override: int | None,
+    temperature_override: float | None,
+    num_ctx_override: int | None,
     check_only: bool,
     resume: bool,
 ) -> None:
@@ -465,19 +481,20 @@ def translate_cmd(
 
     \b
     기본 모델은 exaone3.5:7.8b다(--model로 오버라이드 가능). 코드·
-    mermaid·raw-HTML 블록은 번역하지 않고 그대로 보존하고, book.yaml의
-    language 필드는 방향에 맞춰(k2e→en, e2k→ko) 다시 쓴다. 청크 하나에도
-    수십 초가 걸릴 수 있어 챕터·청크 단위 진행 상황을 출력한다. 모델이
-    없어도 자동으로 pull하지 않는다 — `ollama pull <모델>`을 직접
-    실행해야 한다. `--resume`을 주면 OUT_DIR에 이미 번역 결과 파일이
-    있는 챕터는 재번역 없이 건너뛴다 — 네트워크/타임아웃으로 중간에
-    실패했을 때 같은 명령을 다시 실행해 이어서 진행할 수 있다(챕터
-    단위로만 판단하므로 중단된 챕터 자체는 처음부터 다시 번역된다).
-    단, 재시도 후에도 청크가 한글로 남았던 챕터(k2e)는 OUT_DIR에 남긴
-    `.incomplete.json` 마커로 추적되어 "이미 있음"으로 건너뛰지 않고
-    자동으로 지운 뒤 재번역한다 — 같은 코퍼스를 `--resume`으로 반복
-    실행할수록 미완료 챕터가 점차 줄어드는 방향으로 품질이 개선된다
-    (e2k는 청크 검증 신호가 없어 이 자동 재번역 대상에 포함되지 않는다).
+    mermaid·raw-HTML 블록은 번역하지 않고 그대로 보존하고, 마크다운 표는
+    행의 셀 단위로 번역해 파이프 구조 파손을 막는다. book.yaml의 language
+    필드는 방향에 맞춰(k2e→en, e2k→ko) 다시 쓴다. 청크 하나에도 수십 초가
+    걸릴 수 있어 챕터·청크 단위 진행 상황을 출력한다. 모델이 없어도
+    자동으로 pull하지 않는다 — `ollama pull <모델>`을 직접 실행해야 한다.
+    `--resume`을 주면 OUT_DIR에 이미 번역 결과 파일이 있는 챕터는 재번역
+    없이 건너뛴다 — 네트워크/타임아웃으로 중간에 실패했을 때 같은 명령을
+    다시 실행해 이어서 진행할 수 있다. 재시도 후에도 청크가 한글로 남았던
+    챕터(k2e)는 "이미 있음"으로 건너뛰지 않고, 마커에 캐시된 청크별 번역
+    결과 중 실패했던 청크만 다시 번역한다(청크 단위 이어하기 — 이미
+    통과한 청크는 다시 모델에 묻지 않는다). 같은 코퍼스를 `--resume`으로
+    반복 실행할수록 미완료 청크가 점차 줄어드는 방향으로 품질이
+    개선된다(e2k는 청크 검증 신호가 없어 이 자동 재번역 대상에 포함되지
+    않는다).
     """
     from mdbook_binder.check import check_ollama
     from mdbook_binder.manifest import TranslationConfig
@@ -490,6 +507,8 @@ def translate_cmd(
         host=host_override or base.host,
         timeout=timeout_override or base.timeout,
         chunk_chars=chunk_chars_override or base.chunk_chars,
+        temperature=temperature_override if temperature_override is not None else base.temperature,
+        num_ctx=num_ctx_override or base.num_ctx,
     )
     target_language = "en" if direction == "k2e" else "ko"
 

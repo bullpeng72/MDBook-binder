@@ -137,14 +137,21 @@ class TestTranslationConfig:
             "  model: llama3:8b\n"
             "  host: http://remote:11434\n"
             "  timeout: 120\n"
-            "  chunk_chars: 500\n",
+            "  chunk_chars: 500\n"
+            "  temperature: 0.1\n"
+            "  num_ctx: 16384\n",
         )
 
         config = BookConfig.load(tmp_path)
         assert config is not None
 
         assert config.translation == TranslationConfig(
-            model="llama3:8b", host="http://remote:11434", timeout=120, chunk_chars=500
+            model="llama3:8b",
+            host="http://remote:11434",
+            timeout=120,
+            chunk_chars=500,
+            temperature=0.1,
+            num_ctx=16384,
         )
 
     def test_partial_section_falls_back_to_dataclass_defaults(self, tmp_path: Path):
@@ -159,6 +166,8 @@ class TestTranslationConfig:
         assert config.translation.host == TranslationConfig().host
         assert config.translation.timeout == TranslationConfig().timeout
         assert config.translation.chunk_chars == TranslationConfig().chunk_chars
+        assert config.translation.temperature == TranslationConfig().temperature
+        assert config.translation.num_ctx == TranslationConfig().num_ctx
 
 
 class TestSplitConfig:
