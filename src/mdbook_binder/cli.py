@@ -2,10 +2,10 @@
 
 mdbook-binder check       <root>                                     빌드 전 사전 점검
 mdbook-binder build html  <root> [--out FILE] [--title TITLE] [--language ko|en] [--color NAME]
-mdbook-binder build pdf   <root> [--merge [이름]] [--out-dir ...] [--color NAME]
-mdbook-binder edit        <html>  [--port 5757] [--out ...] [--no-browser]
-mdbook-binder import      <pdf> <out_dir> [--title TITLE]
-mdbook-binder translate   <root> <out_dir> --direction k2e|e2k [--model ...] [--host ...]
+mdbook-binder build pdf   <root> [--merge [이름]] [--out-dir ...] [--color NAME] [--title TITLE] [--language ko|en]
+mdbook-binder edit        <html>  [--port 5757] [--out ...] [--no-browser] [--export-md DIR]
+mdbook-binder import      <pdf> <out_dir> [--title TITLE] [--no-images] [--no-headings]
+mdbook-binder translate   <root> <out_dir> --direction k2e|e2k [--model ...] [--host ...] [--resume]
 """
 
 from __future__ import annotations
