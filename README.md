@@ -61,6 +61,7 @@ MDBook-binder는 **마크다운 파일 모음(코퍼스)을 입력받아, 코드
 
 ```mermaid
 flowchart TD
+    J["pdf_import.py\nPDF → 마크다운 코퍼스 추출\n컬럼/표/이미지 인식"] --> A
     A["마크다운 코퍼스\n(임의의 디렉토리)"] --> B["manifest.py\nBookConfig(book.yaml) + resolve()\n3단계 순서 해석"]
     B --> C["render.py\nmd_to_html / demote_headings\n(콜아웃·로케일 config 주입)"]
     C --> D["html_book.py\n사이드바 · 검색 · base64 이미지\n섹션 id 충돌 자동 회피"]
@@ -70,10 +71,14 @@ flowchart TD
     D -.book_yaml split 설정 시.-> H["chapter_split.py\nH2 경계로 파일 하나를\n여러 가상 챕터로 분할"]
     E -.book_yaml split 설정 시.-> H
     F -.edit --export-md 코퍼스로 내보내기 일부 손실.-> A
+    A --> I["translation.py\n로컬 Ollama 번역(k2e/e2k)\n코드·Mermaid·raw-HTML 보존"]
+    I -.번역된 새 코퍼스로 출력.-> A
 
     style D fill:#4527a0,color:#fff
     style E fill:#00897b,color:#fff
     style F fill:#5e35b1,color:#fff
+    style I fill:#c62828,color:#fff
+    style J fill:#e65100,color:#fff
 ```
 
 `html_book.py`가 출력하는 `<section class="chapter-section" id="{slug}">`
