@@ -378,10 +378,17 @@ def _rows_to_table_markdown(rows: list[list[dict]], gap_threshold: float = 20.0)
     n_cols = len(columns)
 
     def cells_for(row: list[dict]) -> list[str]:
+        # 셀 텍스트의 리터럴 "|"는 이스케이프해야 한다 — CLI 플래그 설명
+        # ("true|false"), 타입 유니온("str|None") 같은 기술 문서 표에 흔한
+        # 패턴인데, 이스케이프 없이 그대로 두면 그 "|"가 열 구분자로
+        # 오인되어 표 전체 열이 어긋난다(실사용 재현·확인됨). translation.py의
+        # 표 파서(_TABLE_PROCESSOR._split_row)는 "\|"를 이미 리터럴 파이프로
+        # 처리하므로, 생성 쪽에서도 같은 이스케이프 규칙을 맞춘다.
         cells = [""] * n_cols
         for w in row:
             idx = min(range(n_cols), key=lambda i: abs(w["x0"] - columns[i]))
-            cells[idx] = f"{cells[idx]} {w['text']}".strip() if cells[idx] else w["text"]
+            text = w["text"].replace("|", "\\|")
+            cells[idx] = f"{cells[idx]} {text}".strip() if cells[idx] else text
         return cells
 
     table = [cells_for(row) for row in rows]
@@ -984,13 +991,29 @@ def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list
     판단할 표본이 없음) 그대로 반환한다. 같은 페이지 안에서 같은 줄이 여러 번
     나와도 그 페이지는 1회로만 센다 — 문서 전체 등장 횟수가 아니라 "몇 개
     페이지에 나오는가"를 기준으로 해야 러닝 헤더/푸터를 정확히 잡아낸다.
+
+    마크다운 표 행("| ... |", 구분선 "|---|---|" 포함)은 반복 판정 대상에서
+    제외한다 — 긴 표가 페이지를 넘어갈 때 매 페이지 표 헤더를 반복하는 건
+    실제 책·PDF의 흔한 조판 관행인데, 이 함수는 그런 표 헤더까지 "동일 문자열
+    반복 = 러닝 헤더"로 오인해 지워버렸다(실사용 재현·확인됨) — 헤더·구분선이
+    사라지면 이어지는 데이터 행만 남아 python-markdown이 표 자체를 인식하지
+    못한다. `_process_page()`가 이 함수 호출 전에 이미 표 영역을 `| ... |`
+    행으로 렌더링해두므로, `clean_paragraphs()`가 같은 판정에 쓰는
+    `_TABLE_ROW_RE`(양쪽 끝 `|` 모두 확인)를 그대로 재사용한다 — 단순히
+    "|"로 시작하는지만 보면, 닫는 `|`가 없는 기형/잘린 줄(우연히 "|"로
+    시작하는 러닝 헤더 등)까지 표 행으로 오판해 반복 제거 대상에서
+    빠뜨릴 수 있다.
     """
     if len(pages) < 2:
         return pages
 
     counts: dict[str, int] = {}
     for page in pages:
-        for line in {ln.strip() for ln in page.split("\n") if ln.strip()}:
+        for line in {
+            ln.strip()
+            for ln in page.split("\n")
+            if ln.strip() and not _TABLE_ROW_RE.match(ln.strip())
+        }:
             counts[line] = counts.get(line, 0) + 1
 
     threshold = max(2, round(len(pages) * min_fraction))
@@ -999,7 +1022,12 @@ def strip_repeated_lines(pages: list[str], *, min_fraction: float = 0.5) -> list
         return pages
 
     return [
-        "\n".join(ln for ln in page.split("\n") if ln.strip() not in repeated) for page in pages
+        "\n".join(
+            ln
+            for ln in page.split("\n")
+            if _TABLE_ROW_RE.match(ln.strip()) or ln.strip() not in repeated
+        )
+        for page in pages
     ]
 
 

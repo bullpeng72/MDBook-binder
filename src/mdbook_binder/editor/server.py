@@ -403,13 +403,26 @@ def create_app(
             updated_soup = html_editor.apply_all_changes()
 
             # image_editor는 별도 soup 인스턴스를 갖고 있으므로, 갱신된 트리의
-            # 실제 노드로 참조를 다시 매핑해야 삭제/교체가 반영된다.
+            # 실제 노드로 참조를 다시 매핑해야 삭제/교체가 반영된다. src
+            # 문자열로만 찾으므로, 동일 src를 가진 이미지가 문서에 둘 이상
+            # 있으면 삭제된 섹션에 속했던 이미지 항목이 먼저 자리를 채가
+            # 살아있는 다른 이미지의 매칭을 가로챌 수 있다 — 그런 항목은
+            # 애초에 매칭 대상에서 제외한다(html_editor.deleted_section_ids()
+            # 참고, 실사용 재현·확인됨).
             from collections import defaultdict
+
+            deleted_ids = html_editor.deleted_section_ids()
+
+            def _in_deleted_section(img_info: dict) -> bool:
+                sec = img_info["tag"].find_parent("section")
+                return bool(sec and sec.get("id") in deleted_ids)
 
             src_map: dict = defaultdict(list)
             for tag in updated_soup.find_all("img"):
                 src_map[tag.get("src", "")].append(tag)
             for img_info in image_editor.images:
+                if _in_deleted_section(img_info):
+                    continue
                 live = src_map.get(img_info["src"], [])
                 if live:
                     img_info["tag"] = live.pop(0)

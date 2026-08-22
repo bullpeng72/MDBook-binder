@@ -10,11 +10,15 @@ manifest.resolve()가 이미 아는 챕터 순서/exclude 규칙을 그대로 �
 주입받는 순수/의사-순수 함수라, Ollama 설치 없이도 청킹·블록 보호·진행
 출력·book.yaml 재작성 로직을 단위 테스트할 수 있다.
 
-k2e(한→영) 방향은 청크당 has_residual_korean()으로 번역 결과를 검증하고
-실패 시 자동 재시도한다 — 소형 로컬 모델이 밀도 높은 청크에서 지시를
-놓치고 원문을 그대로 돌려주는 경우가 실사용에서 잦았는데, 이전에는 그런
-결과를 검증 없이 그대로 통과시켰다. e2k는 검증하지 않는다(§translate_chapter
-docstring 참고 — 정상적인 영문 잔존과 번역 실패를 구분할 신호가 없음).
+k2e(한→영)·e2k(영→한) 둘 다 청크당 검증하고 실패 시 자동 재시도한다 —
+소형 로컬 모델이 밀도 높은 청크에서 지시를 놓치고 원문을 그대로 돌려주는
+경우가 실사용에서 잦았는데, 이전에는 그런 결과를 검증 없이 그대로
+통과시켰다. 검증 신호는 방향마다 다르다(§translate_chapter의
+_chunk_translation_failed 참고) — k2e는 has_residual_korean()으로 한글
+잔존 비율을 보고, e2k는 is_untranslated_echo()로 원문과 결과가 완전히
+동일한지만 본다(한국어 기술 문서엔 영문 고유명사가 정상적으로 섞이는 게
+흔해 k2e와 대칭인 "영문 비율" 검증은 정상 번역을 계속 오탐하므로 쓸 수
+없다).
 
 재시도 후에도 미완료였던 챕터는 out_dir에 `.incomplete.json` 마커를 남긴다
 (§translate_corpus docstring). `--resume`은 이 마커가 있는 챕터를 "이미
@@ -132,6 +136,43 @@ def has_residual_korean(text: str, *, threshold: float = _RESIDUAL_KOREAN_THRESH
     return residual_korean_ratio(text) > threshold
 
 
+_LATIN_RE = re.compile(r"[A-Za-z]")
+# e2k(영→한)는 has_residual_korean() 같은 스크립트 비율 기반 검증을 쓸 수
+# 없다 — 한국어 기술 문서엔 영문 고유명사·약어가 정상적으로 섞이는 게 흔해
+# "번역 실패로 영어가 남았다"와 "정상적으로 영문 용어가 남았다"를 구분할
+# 신호가 없기 때문이다. 하지만 "원문과 결과가 완전히 동일하다"는 신호는 이
+# 문제를 겪지 않는다 — 조금이라도 번역이 일어났다면 자연어 산문이 원문과
+# 글자 단위로 완전히 같을 일은 사실상 없다. 이 임계값은 그 신호를 브랜드명
+# 하나짜리("AOO Stack")처럼 원래도 그대로 남는 게 정상인 짧은 청크까지
+# 오탐하지 않을 만큼(대략 문장 하나 분량) 넉넉하게 잡은 것이다.
+_ECHO_MIN_LATIN_CHARS = 20
+
+
+def is_untranslated_echo(original: str, result: str) -> bool:
+    """e2k 번역 결과가 원문을 그대로 돌려받은("번역 시도조차 안 함") 것인지
+    판정한다(순수 함수) — 스크립트 비율과 무관해 방향에 상관없이 안전하다.
+
+    번역할 자연어가 사실상 없는 원문(숫자·기호·아주 짧은 조각)까지
+    오탐하지 않도록, 원문에 라틴 알파벳이 §_ECHO_MIN_LATIN_CHARS 이상
+    있을 때만(=번역 대상 산문이 실제로 있을 때만) 판정한다.
+    """
+    if original.strip() != result.strip():
+        return False
+    return len(_LATIN_RE.findall(original)) >= _ECHO_MIN_LATIN_CHARS
+
+
+def _chunk_translation_failed(original: str, result: str, target_language: str | None) -> bool:
+    """청크 하나의 번역 시도가 실패했다고 볼 수 있는지 방향에 맞는 신호로
+    판정한다(순수 함수) — k2e/e2k가 서로 다른 신호를 쓰므로 translate_chapter의
+    재시도 루프가 이 판정 하나만 보고 양쪽 방향을 동일하게 처리할 수 있게
+    묶는다."""
+    if target_language == "en":
+        return has_residual_korean(result)
+    if target_language == "ko":
+        return is_untranslated_echo(original, result)
+    return False
+
+
 # render.py가 HTML 렌더링에 이미 쓰는 것과 같은 "tables" 확장을 그대로 재사용한다
 # — 표 인식/셀 분리 규칙을 translation.py에서 정규식으로 새로 짜면 render.py와
 # 판정이 갈릴 위험이 있고, 인라인 코드 안의 `|`를 이스케이프까지 고려해 안전하게
@@ -155,6 +196,23 @@ def is_table_chunk(chunk: str) -> bool:
     # 쓰지 않는다(render.py가 실제 렌더링에 쓰는 것과 동일한 인스턴스로 직접
     # 확인함) — None을 넘겨도 안전하다.
     return bool(_TABLE_PROCESSOR.test(None, chunk))  # type: ignore[arg-type]
+
+
+def _cell_needs_translation(cell: str, target_language: str | None) -> bool:
+    """표 셀에 아직 번역 안 된 원본 언어 문자가 남아있는지 판정한다(순수 함수).
+
+    판정 기준은 방향마다 반대다 — k2e(원문이 한국어)는 한글이 남아있어야
+    할 일이 있고, e2k(원문이 영어)는 라틴 문자가 남아있어야 할 일이 있다.
+    이 구분 없이 항상 한글 유무로만 판정하던 이전 버전은 e2k에서 심각한
+    버그였다 — e2k 원문 표 셀은 애초에 전부 영어라 한글이 있을 리 없으니
+    모든 셀이 "번역할 것 없음"으로 오판되어 translate_fn이 단 한 번도
+    호출되지 않고 표 전체가 영문 그대로 남았다(실사용에서 재현·확인됨).
+    target_language가 없으면(직접 호출하는 기존 테스트 등) k2e 기준으로
+    폴백한다.
+    """
+    if target_language == "ko":
+        return bool(_LATIN_RE.search(cell))
+    return bool(_HANGUL_RE.search(cell))
 
 
 _CELL_HALLUCINATION_LEN_MULTIPLIER = 4
@@ -195,7 +253,9 @@ def _translate_cell(cell: str, translate_fn: Callable[[str], str]) -> str:
     return result
 
 
-def translate_table_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str:
+def translate_table_chunk(
+    chunk: str, translate_fn: Callable[[str], str], *, target_language: str | None = None
+) -> str:
     """표 청크를 행의 셀 단위로 번역해 파이프(|) 구조를 코드가 그대로 보존한
     채 재조립한다.
 
@@ -203,9 +263,9 @@ def translate_table_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str
     빠뜨리거나 파이프 구조 자체를 깨뜨리는 사례가 실사용에서 반복 확인됐다
     (§translate_chapter docstring 참고) — 마크다운 표 문법을 모델이 그대로
     지켜주길 기대하는 대신, 셀 텍스트만 개별로 모델에 보내고 파이프로
-    재조립하는 일은 코드가 맡는다. 구분선 행(|---|---|)과 한글이 없는 셀
-    (숫자·기호·영문 전용 — 참조 번호 `§14`, 체크마크 등)은 번역할 내용이
-    없으므로 모델을 거치지 않고 그대로 둔다.
+    재조립하는 일은 코드가 맡는다. 구분선 행(|---|---|)과 번역할 원본
+    언어 문자가 없는 셀(숫자·기호 전용 — 참조 번호 `§14`, 체크마크 등,
+    §_cell_needs_translation 참고)은 모델을 거치지 않고 그대로 둔다.
     """
     if not _TABLE_PROCESSOR.test(None, chunk):  # type: ignore[arg-type]
         return translate_fn(chunk)  # 방어적 폴백 — 호출부는 항상 is_table_chunk()로 먼저 확인한다
@@ -220,14 +280,18 @@ def translate_table_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str
         # 짜지 않기 위해 재사용한다.
         cells = _TABLE_PROCESSOR._split_row(row)  # type: ignore[attr-defined]
         translated_cells = [
-            _translate_cell(cell.strip(), translate_fn) if _HANGUL_RE.search(cell) else cell.strip()
+            _translate_cell(cell.strip(), translate_fn)
+            if _cell_needs_translation(cell, target_language)
+            else cell.strip()
             for cell in cells
         ]
         out_rows.append("| " + " | ".join(translated_cells) + " |")
     return "\n".join(out_rows)
 
 
-def translate_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str:
+def translate_chunk(
+    chunk: str, translate_fn: Callable[[str], str], *, target_language: str | None = None
+) -> str:
     """청크 하나를 번역한다 — 표 단락은 translate_table_chunk로, 나머지
     산문 단락은 (연속된 것끼리 묶어) translate_fn으로 넘긴다.
 
@@ -239,11 +303,15 @@ def translate_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str:
     그래서 여기서는 청크를 원래 단락 단위로 다시 쪼개 표 단락만 골라
     처리하고, 나머지는 원래 묶여 있던 순서·인접 관계를 그대로 살려
     (표가 아닌 단락들끼리는 계속 하나로 묶어) translate_fn을 호출한다.
+
+    target_language는 표 단락의 셀 스킵 판정에만 쓰인다(translate_table_chunk
+    → _cell_needs_translation 참고) — 방향에 따라 "번역할 게 남았다"는
+    신호가 반대이기 때문이다.
     """
     paragraphs = chunk.split("\n\n")
     if len(paragraphs) == 1:
         return (
-            translate_table_chunk(chunk, translate_fn)
+            translate_table_chunk(chunk, translate_fn, target_language=target_language)
             if is_table_chunk(chunk)
             else translate_fn(chunk)
         )
@@ -259,7 +327,7 @@ def translate_chunk(chunk: str, translate_fn: Callable[[str], str]) -> str:
     for para in paragraphs:
         if is_table_chunk(para):
             _flush_prose()
-            parts.append(translate_table_chunk(para, translate_fn))
+            parts.append(translate_table_chunk(para, translate_fn, target_language=target_language))
         else:
             prose_run.append(para)
     _flush_prose()
@@ -291,16 +359,21 @@ def translate_chapter(
     청크수 순서로 한 번씩) — 호출부가 청크별 결과를 다음 --resume에
     캐시해두려 할 때 쓴다(§translate_corpus의 마커 파일 참고).
 
-    target_language="en"(k2e)일 때만 has_residual_korean()으로 각 청크
-    결과를 검증하고, 여전히 한글이 남아있으면 translate_fn을 최대
+    각 청크 결과는 방향에 맞는 신호로 검증한다(_chunk_translation_failed
+    참고) — k2e(target_language="en")는 has_residual_korean()으로 한글이
+    남았는지, e2k(target_language="ko")는 is_untranslated_echo()로 원문을
+    그대로 돌려받았는지 본다. 두 방향이 다른 신호를 쓰는 이유는 e2k엔
+    has_residual_korean과 대칭인 "영문 비율" 검증을 쓸 수 없기 때문이다
+    — 한국어 기술 문서엔 영문 고유명사·약어가 정상적으로 섞이는 게 흔해
+    "번역 실패로 영어가 남았다"와 "정상적으로 영문 용어가 남았다"를
+    구분할 신호가 없다. 반면 "원문과 결과가 완전히 동일하다"는 신호는
+    그 문제를 겪지 않는다. 검증에 실패하면 translate_fn을 최대
     max_retries회 다시 호출한다(동일 청크를 모델에 다시 물어보는 것 —
     LLM 출력은 비결정적이라 재시도로 통과하는 경우가 실사용에서 흔하다).
-    e2k(target_language="ko")는 검증하지 않는다 — 한국어 기술 문서에
-    영문 고유명사·약어가 정상적으로 섞이는 게 흔해 "번역 실패"와
-    "정상적인 영문 잔존"을 신뢰성 있게 구분할 신호가 없다. 재시도 후에도
-    실패하면 on_incomplete(j, n)를 호출해 호출부가 어떤 청크가 여전히
-    한글로 남았는지 알 수 있게 한다 — 조용히 안 좋은 출력을 그대로
-    통과시키던 이전 동작과 달리, 최소한 사람이 나중에 찾아볼 수 있게 한다.
+    재시도 후에도 실패하면 on_incomplete(j, n)를 호출해 호출부가 어떤
+    청크가 여전히 미완료인지 알 수 있게 한다 — 조용히 안 좋은 출력을
+    그대로 통과시키던 이전 동작과 달리, 최소한 사람이 나중에 찾아볼 수
+    있게 한다.
 
     청크 안에 마크다운 표 단락이 있으면(translate_chunk 참고) 청크 전체를
     translate_fn에 통째로 넘기는 대신 표 단락만 행의 셀 단위로 나눠
@@ -344,11 +417,11 @@ def translate_chapter(
                 on_chunk_done(i, chunk)
             continue
 
-        result = translate_chunk(chunk, translate_fn)
-        if target_language == "en" and has_residual_korean(result):
+        result = translate_chunk(chunk, translate_fn, target_language=target_language)
+        if _chunk_translation_failed(chunk, result, target_language):
             for _ in range(max_retries):
-                result = translate_chunk(chunk, translate_fn)
-                if not has_residual_korean(result):
+                result = translate_chunk(chunk, translate_fn, target_language=target_language)
+                if not _chunk_translation_failed(chunk, result, target_language):
                     break
             else:
                 if on_incomplete:
@@ -399,10 +472,9 @@ def translate_corpus(
     재번역된다. LLM 출력이 비결정적이라 같은 챕터를 --resume으로 반복
     실행할수록 미완료 청크 수가 점차 줄어드는 것이 기대 동작이다(수렴
     보장은 없음 — 특정 청크가 매 시도 실패할 수도 있다). 이 마커는
-    on_incomplete가 실제로 호출될 때만 쓰이므로, 현재는 k2e
-    (has_residual_korean 검증이 있는 방향)에서만 의미 있게 동작한다 — e2k는
-    청크 검증 자체가 없어(§translate_chapter docstring) 마커가 생기지 않고,
-    기존과 동일하게 파일 존재 여부만으로 건너뛴다.
+    on_incomplete가 실제로 호출될 때만 쓰이므로, k2e·e2k 둘 다 각자의
+    검증 신호(§translate_chapter의 _chunk_translation_failed 참고)로
+    동일하게 동작한다.
     """
     effective_chunk_chars = chunk_chars or (
         config.translation.chunk_chars

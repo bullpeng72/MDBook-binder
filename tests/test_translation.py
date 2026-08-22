@@ -14,11 +14,14 @@ import yaml
 from mdbook_binder.manifest import BookConfig, TranslationConfig
 from mdbook_binder.translation import (
     _build_prompt,
+    _cell_needs_translation,
+    _chunk_translation_failed,
     _looks_like_cell_hallucination,
     _translate_cell,
     chunk_paragraphs,
     has_residual_korean,
     is_table_chunk,
+    is_untranslated_echo,
     make_ollama_translate_fn,
     protect_blocks,
     reassemble_chunks,
@@ -179,18 +182,66 @@ class TestTranslateChapter:
             out == "한글 원문입니다."
         )  # 실패해도 마지막 결과는 그대로 반환(빈 문자열로 날리지 않음)
 
-    def test_e2k_does_not_verify_or_retry(self):
-        """target_language='ko'(e2k)는 영문 잔존을 검증하지 않는다 — 정상적인
-        영문 고유명사와 번역 실패를 구분할 신호가 없으므로 검증 자체를 건너뛴다."""
+    def test_e2k_retries_chunk_returned_as_untranslated_echo(self):
+        """target_language='ko'(e2k)는 원문과 결과가 완전히 동일한 청크를
+        "번역 시도조차 안 함"으로 보고 재시도한다(is_untranslated_echo)."""
+        calls: list[str] = []
+        text = "This paragraph has more than twenty latin letters in it."
+
+        def fake(chunk: str) -> str:
+            calls.append(chunk)
+            return chunk if len(calls) == 1 else "번역된 문단입니다."
+
+        out = translate_chapter(
+            text, chunk_chars=100, translate_fn=fake, target_language="ko"
+        )
+
+        assert len(calls) == 2  # 첫 시도(원문 그대로) 실패 → 1회 재시도로 성공
+        assert out == "번역된 문단입니다."
+
+    def test_e2k_gives_up_after_max_retries_and_reports_incomplete(self):
+        incomplete: list[tuple[int, int]] = []
+        text = "This paragraph has more than twenty latin letters in it."
+
+        out = translate_chapter(
+            text,
+            chunk_chars=100,
+            translate_fn=lambda s: s,  # 항상 원문 그대로(번역 실패 시뮬레이션)
+            target_language="ko",
+            max_retries=2,
+            on_incomplete=lambda j, n: incomplete.append((j, n)),
+        )
+
+        assert incomplete == [(1, 1)]
+        assert out == text  # 실패해도 마지막 결과는 그대로 반환
+
+    def test_e2k_does_not_flag_short_chunk_left_unchanged(self):
+        """번역할 실질 내용이 거의 없는(라틴 문자가 적은) 짧은 청크가 그대로
+        남아도 실패로 오탐하지 않는다 — 브랜드명 한 단어짜리 청크처럼
+        원래도 안 바뀌는 게 정상인 경우가 있다."""
         calls: list[str] = []
         out = translate_chapter(
-            "some english text",
+            "AOO Stack",
             chunk_chars=100,
             translate_fn=lambda s: calls.append(s) or s,
             target_language="ko",
         )
+        assert len(calls) == 1  # 재시도 없이 한 번만 호출됨
+        assert out == "AOO Stack"
+
+    def test_e2k_successful_translation_is_not_retried(self):
+        calls: list[str] = []
+        text = "This paragraph has more than twenty latin letters in it."
+
+        out = translate_chapter(
+            text,
+            chunk_chars=100,
+            translate_fn=lambda s: calls.append(s) or "번역된 문단입니다.",
+            target_language="ko",
+        )
+
         assert len(calls) == 1
-        assert out == "some english text"
+        assert out == "번역된 문단입니다."
 
     def test_successful_translation_with_stray_proper_noun_is_not_retried(self):
         """번역 결과에 고유명사 한두 개 정도(임계값 이하)만 한글로 남으면
@@ -223,6 +274,23 @@ class TestTranslateChapter:
         assert text not in calls
         assert "|---|---|" in out  # 구분선은 그대로 보존
         assert "모호한 지시".upper() in out
+
+    def test_e2k_table_chunk_is_translated_cell_by_cell(self):
+        """회귀 테스트: translate_chapter를 통해 끝까지 호출했을 때도 e2k
+        표가 실제로 번역돼야 한다(target_language가 translate_chunk까지
+        제대로 전달되는지 확인)."""
+        text = "| Tool | Note |\n|---|---|\n| BMAD | Role-based |"
+        calls: list[str] = []
+
+        out = translate_chapter(
+            text,
+            chunk_chars=1000,
+            translate_fn=lambda s: calls.append(s) or f"[KO:{s}]",
+            target_language="ko",
+        )
+
+        assert "Role-based" in calls  # 셀이 실제로 translate_fn에 전달됨
+        assert "[KO:Role-based]" in out
 
     def test_k2e_retry_applies_to_table_chunks_too(self):
         """표 청크도 일반 청크와 동일하게 한글이 남으면 재시도·on_incomplete
@@ -324,6 +392,47 @@ class TestResidualKorean:
         assert has_residual_korean(text)
 
 
+class TestIsUntranslatedEcho:
+    def test_identical_long_english_text_is_flagged(self):
+        text = "This paragraph has more than twenty latin letters in it."
+        assert is_untranslated_echo(text, text)
+
+    def test_different_result_is_not_flagged(self):
+        assert not is_untranslated_echo(
+            "This paragraph has more than twenty latin letters.", "번역된 문단입니다."
+        )
+
+    def test_short_identical_text_below_threshold_is_not_flagged(self):
+        """브랜드명 한 단어짜리처럼 원래도 안 바뀌는 게 정상인 짧은 청크는
+        오탐하지 않는다."""
+        assert not is_untranslated_echo("AOO Stack", "AOO Stack")
+
+    def test_identical_non_latin_text_is_not_flagged(self):
+        """라틴 문자가 거의 없는 원문(예: 숫자·기호)은 원문 그대로 남아도
+        정상이므로 오탐하지 않는다."""
+        assert not is_untranslated_echo("§14", "§14")
+
+    def test_whitespace_only_difference_still_counts_as_echo(self):
+        assert is_untranslated_echo(
+            "This paragraph has more than twenty latin letters.\n",
+            "This paragraph has more than twenty latin letters.",
+        )
+
+
+class TestChunkTranslationFailed:
+    def test_k2e_uses_residual_korean(self):
+        assert _chunk_translation_failed("원문", "한글이 절반 이상인 문장입니다", "en")
+        assert not _chunk_translation_failed("원문", "Translated cleanly.", "en")
+
+    def test_e2k_uses_untranslated_echo(self):
+        text = "This paragraph has more than twenty latin letters in it."
+        assert _chunk_translation_failed(text, text, "ko")
+        assert not _chunk_translation_failed(text, "번역된 문단입니다.", "ko")
+
+    def test_unknown_direction_never_flags(self):
+        assert not _chunk_translation_failed("x", "x", None)
+
+
 class TestIsTableChunk:
     def test_pure_table_is_detected(self):
         chunk = "| # | 문제 | 담당 |\n|---|---|---|\n| A1 | 모호한 지시 | 방법론 |"
@@ -394,6 +503,62 @@ class TestTranslateTableChunk:
         out = translate_table_chunk("그냥 산문.", lambda c: calls.append(c) or "번역됨")
         assert calls == ["그냥 산문."]
         assert out == "번역됨"
+
+    def test_e2k_translates_english_cells(self):
+        """회귀 테스트: e2k(target_language='ko') 방향에서 표 셀이 전혀
+        번역되지 않던 버그. 원문이 영어라 한글이 없는 게 정상인데, 예전
+        코드는 "한글 없음 = 번역할 것 없음"으로 판정해 translate_fn을
+        한 번도 호출하지 않고 표 전체를 원문 그대로 통과시켰다."""
+        chunk = "| Tool | Description |\n|---|---|\n| BMAD | Role-based agile simulation |"
+        calls: list[str] = []
+
+        def fake(cell: str) -> str:
+            calls.append(cell)
+            return f"[KO:{cell}]"
+
+        out = translate_table_chunk(chunk, fake, target_language="ko")
+
+        assert calls == ["Tool", "Description", "BMAD", "Role-based agile simulation"]
+        assert (
+            out == "| [KO:Tool] | [KO:Description] |\n"
+            "|---|---|\n"
+            "| [KO:BMAD] | [KO:Role-based agile simulation] |"
+        )
+
+    def test_e2k_still_skips_numeric_and_symbol_only_cells(self):
+        """e2k에서도 번역할 문자가 아예 없는 셀(숫자·기호 전용)은 여전히
+        모델을 거치지 않아야 한다."""
+        chunk = "| # | Note |\n|---|---|\n| 1 | See above |"
+        calls: list[str] = []
+
+        translate_table_chunk(chunk, lambda c: calls.append(c) or c, target_language="ko")
+
+        assert "1" not in calls  # 순수 숫자 셀은 스킵
+        assert "See above" in calls  # 영문 셀은 번역 대상
+
+    def test_no_target_language_falls_back_to_k2e_behavior(self):
+        """target_language를 안 주면(기존 호출부와의 하위 호환) k2e 기준
+        (한글 유무)으로 판정한다."""
+        chunk = "| a | 문제 |\n|---|---|\n| 1 | 모호함 |"
+        calls: list[str] = []
+
+        translate_table_chunk(chunk, lambda c: calls.append(c) or c)
+
+        assert calls == ["문제", "모호함"]
+
+
+class TestCellNeedsTranslation:
+    def test_k2e_needs_hangul(self):
+        assert _cell_needs_translation("모호한 지시", target_language="en")
+        assert not _cell_needs_translation("BMAD", target_language="en")
+
+    def test_e2k_needs_latin(self):
+        assert _cell_needs_translation("Role-based simulation", target_language="ko")
+        assert not _cell_needs_translation("§14", target_language="ko")
+
+    def test_no_target_language_defaults_to_k2e(self):
+        assert _cell_needs_translation("모호한 지시", target_language=None)
+        assert not _cell_needs_translation("BMAD", target_language=None)
 
 
 class TestLooksLikeCellHallucination:
@@ -469,6 +634,16 @@ class TestTranslateChunk:
         assert chunk not in calls  # 청크 전체가 통째로 넘어가는 경우는 없음
         assert "|---|---|" in out
         assert "[EN:### 다음 절 제목]" in out
+
+    def test_target_language_reaches_table_cells(self):
+        """translate_chunk가 target_language를 translate_table_chunk까지
+        그대로 전달해야 e2k 표 셀이 번역 대상으로 잡힌다."""
+        chunk = "| Tool | Note |\n|---|---|\n| BMAD | Role-based |"
+        calls: list[str] = []
+
+        translate_chunk(chunk, lambda c: calls.append(c) or c, target_language="ko")
+
+        assert "Role-based" in calls
 
     def test_prose_paragraphs_around_a_table_stay_grouped(self):
         """표가 아닌 연속된 단락들은 여전히 하나로 묶여 translate_fn 한 번에
@@ -597,6 +772,20 @@ class TestTranslateCorpus:
         data = json.loads(marker.read_text(encoding="utf-8"))
         assert data["incomplete_chunks"] == [1]
         assert data["total_chunks"] == 1
+
+    def test_e2k_incomplete_chunks_also_write_marker_file(self, tmp_path: Path):
+        """회귀 테스트: e2k도 이제 검증 신호(is_untranslated_echo)가 있으므로
+        k2e와 동일하게 미완료 마커를 남기고 --resume 대상이 돼야 한다."""
+        root = tmp_path / "src"
+        out_dir = tmp_path / "out"
+        _write(root, "chapter.md", "This paragraph has more than twenty latin letters.\n")
+
+        translate_corpus(root, out_dir, config=None, target_language="ko", translate_fn=lambda s: s)
+
+        marker = out_dir / "chapter.md.incomplete.json"
+        assert marker.exists()
+        data = json.loads(marker.read_text(encoding="utf-8"))
+        assert data["incomplete_chunks"] == [1]
 
     def test_clean_translation_leaves_no_marker(self, tmp_path: Path):
         root = tmp_path / "src"

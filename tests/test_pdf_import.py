@@ -14,6 +14,7 @@ from mdbook_binder.pdf_import import (
     _is_code_row,
     _mark_heading_words,
     _row_groups,
+    _rows_to_table_markdown,
     _rows_to_text,
     _save_images_and_build_elements,
     calibrate_body_font_size,
@@ -728,6 +729,24 @@ class TestCleanParagraphsDocumentBullets:
         assert "\n\n" not in result
 
 
+class TestRowsToTableMarkdown:
+    def test_cell_containing_pipe_character_is_escaped(self):
+        """회귀 테스트: CLI 플래그 설명("true|false"), 타입 유니온("str|None")
+        같은 기술 문서 표에 흔한 "|" 문자가 셀 안에 있으면 이스케이프 없이
+        그대로 파이프 표 구분자로 오인돼 열이 어긋났다(실사용 재현·확인됨)."""
+        rows = [
+            [_word("Col1", 0, 0), _word("Col2", 100, 0), _word("Col3", 200, 0)],
+            [_word("cmd", 0, 20), _word("a|b", 100, 20), _word("note", 200, 20)],
+        ]
+        md = _rows_to_table_markdown(rows)
+
+        import markdown
+
+        html = markdown.markdown(md, extensions=["tables"])
+        assert "<td>a|b</td>" in html  # 한 셀로 유지됨(2개 셀로 안 쪼개짐)
+        assert html.count("<td>") == 3  # 헤더 3열 그대로, 행이 안 늘어남
+
+
 class TestDetectTable:
     def test_prose_is_not_misidentified_as_table(self):
         """회귀 대상: 단어 x0를 문서 전체에서 무작정 클러스터링하면 왼쪽 정렬된
@@ -821,6 +840,45 @@ class TestStripRepeatedLines:
     def test_no_repeated_lines_returns_pages_unchanged(self):
         pages = ["unique one", "unique two", "unique three"]
         assert strip_repeated_lines(pages) == pages
+
+    def test_table_header_repeated_across_pages_is_preserved(self):
+        """회귀 테스트: 긴 표가 페이지를 넘어갈 때 매 페이지 표 헤더를
+        반복하는 건 실제 PDF의 흔한 조판 관행인데, 예전엔 이 헤더·구분선을
+        "동일 문자열이 여러 페이지에 반복 = 러닝 헤더"로 오인해 모든
+        페이지에서 지워버렸다(실사용 재현·확인됨) — 헤더·구분선이 없으면
+        이어지는 데이터 행만 남아 표 자체로 인식되지 않는다."""
+        pages = [
+            "| Name | Value |\n| ---- | ----- |\n| a | 1 |\n| b | 2 |",
+            "| Name | Value |\n| ---- | ----- |\n| c | 3 |\n| d | 4 |",
+            "| Name | Value |\n| ---- | ----- |\n| e | 5 |\n| f | 6 |",
+        ]
+        result = strip_repeated_lines(pages)
+        for page in result:
+            assert "| Name | Value |" in page
+            assert "| ---- | ----- |" in page
+
+    def test_non_table_running_header_still_removed_alongside_table(self):
+        """표 행 보존 예외가 일반 러닝 헤더/푸터 제거까지 막으면 안 된다."""
+        pages = [
+            "Running Header\n| Name | Value |\n| ---- | ----- |\n| a | 1 |",
+            "Running Header\n| Name | Value |\n| ---- | ----- |\n| b | 2 |",
+        ]
+        result = strip_repeated_lines(pages)
+        assert all("Running Header" not in p for p in result)
+        assert all("| Name | Value |" in p for p in result)
+
+    def test_malformed_row_missing_closing_pipe_is_still_treated_as_repeatable(self):
+        """회귀 테스트: 표 행 판정을 단순히 `line.startswith("|")`로만 하면,
+        닫는 "|"가 없는 기형/잘린 줄(우연히 "|"로 시작하는 러닝 헤더 등)까지
+        표 행으로 오판해 반복 제거 대상에서 빠뜨린다 — clean_paragraphs()가
+        쓰는 `_TABLE_ROW_RE`(양쪽 끝 `|` 모두 확인)와 같은 기준을 써야 한다."""
+        pages = [
+            "| malformed row without close\ncontent 1",
+            "| malformed row without close\ncontent 2",
+            "| malformed row without close\ncontent 3",
+        ]
+        result = strip_repeated_lines(pages)
+        assert all("malformed" not in p for p in result)
 
 
 def test_import_pdf_produces_buildable_corpus(tmp_path: Path):

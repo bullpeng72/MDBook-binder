@@ -18,7 +18,7 @@ from html import escape as _html_escape
 from pathlib import Path
 
 from mdbook_binder.chapter_split import extract_raw_h1, split_chapter_markdown
-from mdbook_binder.manifest import BookConfig, ChapterFile, resolve_split_targets
+from mdbook_binder.manifest import BookConfig, ChapterFile, dedupe_suffix, resolve_split_targets
 from mdbook_binder.mermaid_prerender import mermaid_font_face_css, mermaid_label_css
 from mdbook_binder.render import extract_h1_text, md_to_html, tip_start_pattern
 from mdbook_binder.theme import theme_css
@@ -48,17 +48,62 @@ _PAGE_CONTENT_H = (_A4_HEIGHT_MM - _PDF_MARGIN_TOP_MM - _PDF_MARGIN_BOTTOM_MM) *
 _DEVICE_SCALE = 3
 
 
-def _rewrite_img_paths(html_str: str, base_dir: Path) -> str:
-    """img src의 상대 경로를 file:// 절대 경로로 치환한다 (Playwright 로컬 렌더링용)."""
+def _rewrite_img_paths(
+    html_str: str, base_dir: Path, missing: list[tuple[Path, str]] | None = None
+) -> str:
+    """img src의 상대 경로를 file:// 절대 경로로 치환한다 (Playwright 로컬 렌더링용).
+
+    missing이 주어지면 참조된 이미지가 실제로 없을 때(오타 등) 원본 src는
+    그대로 두고 (절대경로, 원본 src) 쌍을 여기에 기록한다 — html_book.py의
+    _embed_images_as_data_uri()는 이미 이 검증을 하는데(누락 시 빌드 끝에
+    "⚠️ 누락된 이미지 N건" 요약 출력, build_html() 참고) pdf_book.py는
+    존재 여부를 아예 확인하지 않아, 경로 오타가 있는 이미지가 HTML은
+    경고라도 뜨는데 PDF는 아무 경고 없이 빈 자리(또는 브라우저 깨진 이미지
+    아이콘)로 조용히 나오는 비대칭이 있었다.
+    """
 
     def _to_abs(m: re.Match) -> str:
         src = m.group(1)
         if src.startswith(("http://", "https://", "data:", "file://")):
             return m.group(0)
         abs_path = (base_dir / src).resolve()
+        if missing is not None and not abs_path.is_file():
+            missing.append((abs_path, src))
         return f'src="file://{abs_path}"'
 
     return re.sub(r'src="([^"]+)"', _to_abs, html_str)
+
+
+_MD_LINK_RE = re.compile(r'<a\s+href="([^"]+)"[^>]*>(.*?)</a>', re.DOTALL)
+
+
+def _unlink_cross_file_references(html_body: str) -> str:
+    """다른 챕터 .md 파일을 가리키는 상호참조 링크를 일반 텍스트로 풀어낸다.
+
+    html_book.py의 build_html()은 이런 링크를 같은 HTML 안의 #앵커로
+    재작성해 실제로 클릭 가능하게 만드는데(_rewrite_internal_links 참고),
+    PDF는 챕터마다 별개 Playwright 페이지로 독립 렌더링한 뒤(convert_one)
+    pypdf로 페이지 단위 병합하는 구조라(_run_merged) 한 챕터의 HTML 안에
+    다른 챕터의 앵커 대상 자체가 존재하지 않는다 — #앵커로 재작성해도 그
+    챕터의 PDF 단독 렌더링 시점엔 항상 죽은 링크가 된다(병합 여부와 무관:
+    개별 모드는 애초에 다른 챕터가 별개 PDF 파일이라 더더욱 연결할 수
+    없다). 원본 코퍼스의 상대경로(`../Part_I/Chapter_05.md`)를 파란 밑줄
+    링크로 그대로 남겨 클릭 가능한 것처럼 보이게 두는 것보다, 링크 껍데기만
+    벗기고 텍스트는 보존하는 편이 낫다 — editor가 삭제된 섹션의 죽은
+    상호참조를 텍스트로 남기는 것(html_editor.py의 _unlink_dead_references
+    참고)과 같은 원칙이다.
+    """
+
+    def _replace(m: re.Match) -> str:
+        href = m.group(1)
+        if href.startswith(("http://", "https://", "data:", "#", "mailto:")):
+            return m.group(0)
+        path_part, _, _fragment = href.partition("#")
+        if not path_part.endswith(".md"):
+            return m.group(0)
+        return m.group(2)
+
+    return _MD_LINK_RE.sub(_replace, html_body)
 
 
 def _merge_bands(bands: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -311,6 +356,7 @@ async def convert_one(
     out_path: Path,
     custom_css: str = "",
     language: str = "ko",
+    missing_images: list[tuple[Path, str]] | None = None,
 ) -> tuple[Path, str]:
     """챕터(조각) 하나를 PDF로 변환한다. 긴 mermaid 다이어그램은 청크 스크린샷으로 대체 삽입한다.
 
@@ -320,15 +366,22 @@ async def convert_one(
     "어떤 텍스트를 렌더링할지"와 "그 텍스트가 어느 파일에서 왔는지"(이미지
     상대경로·파일명 폴백 제목에 필요)를 분리해야 한다.
 
+    missing_images가 주어지면 누락된 이미지를 여기에 누적한다(호출부가 빌드
+    끝에 한 번에 요약 출력, html_book.py와 동일한 UX — _rewrite_img_paths
+    참고).
+
     반환하는 title은 챕터의 실제 h1 제목(없으면 파일명)이다 — PDF 문서 타이틀과
     병합본 북마크(outline) 라벨에 공용으로 쓴다(html_book.py의 제목 추출 규칙과 동일).
     """
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     body = md_to_html(raw, tip_pattern)
+    body = _unlink_cross_file_references(body)
     title = extract_h1_text(body) or chapter.path.stem
     html = _rewrite_img_paths(
-        _build_pdf_page_html(body, title, custom_css, language), chapter.path.parent
+        _build_pdf_page_html(body, title, custom_css, language),
+        chapter.path.parent,
+        missing_images,
     )
 
     temp_dir = Path(tempfile.mkdtemp(prefix="book_binder_pdf_"))
@@ -487,25 +540,25 @@ async def _run_all(
     tip_pattern,
     custom_css: str = "",
     language: str = "ko",
-) -> tuple[int, int, list[Path]]:
+) -> tuple[int, int, list[Path], list[tuple[Path, str]]]:
     from playwright.async_api import async_playwright
 
     expanded = _expand_split_chapters(chapters, root, config)
 
     ok = fail = 0
     out_paths: list[Path] = []
-    # 같은 원본 파일이 split으로 여러 조각이 되면 파일명이 겹친다 — html_book.py의
-    # _dedupe_slug()와 같은 방식으로 두 번째 조각부터 "-2", "-3"을 붙인다.
+    missing_images: list[tuple[Path, str]] = []
+    # 같은 원본 파일이 split으로 여러 조각이 되면 파일명이 겹친다 —
+    # html_book.py의 _dedupe_slug()와 같은 공용 함수(manifest.dedupe_suffix)로
+    # 두 번째 조각부터 "-2", "-3"을 붙인다.
     seen_stems: dict[Path, int] = {}
     async with async_playwright() as pw:
         browser = await _launch_chromium(pw)
         if browser is None:
-            return 0, len(expanded), []
+            return 0, len(expanded), [], []
         for chapter, raw in expanded:
             rel = chapter.path.relative_to(root)
-            count = seen_stems.get(rel, 0)
-            seen_stems[rel] = count + 1
-            suffix = "" if count == 0 else f"-{count + 1}"
+            suffix = dedupe_suffix(rel, seen_stems)
             out_path = pdf_dir / rel.parent / f"{rel.stem}{suffix}.pdf"
             try:
                 await convert_one(
@@ -516,6 +569,7 @@ async def _run_all(
                     out_path=out_path,
                     custom_css=custom_css,
                     language=language,
+                    missing_images=missing_images,
                 )
                 ok += 1
                 out_paths.append(out_path)
@@ -527,7 +581,20 @@ async def _run_all(
                 print(f"  ❌ {rel}{suffix}: {summary}")
                 fail += 1
         await browser.close()
-    return ok, fail, out_paths
+    return ok, fail, out_paths, missing_images
+
+
+def _print_missing_images(missing: list[tuple[Path, str]], root: Path) -> None:
+    """html_book.py의 build_html()과 동일한 형식으로 누락된 이미지를 요약 출력한다."""
+    if not missing:
+        return
+    print(f"\n⚠️  누락된 이미지 {len(missing)}건 (원본 src 그대로 유지됨):")
+    for abs_path, src in missing:
+        try:
+            rel = abs_path.relative_to(root)
+        except ValueError:
+            rel = abs_path
+        print(f'   - {rel}  (참조: "{src}")')
 
 
 def _add_merge_outline(writer, entries: list[tuple[ChapterFile, str, int]]) -> None:
@@ -564,11 +631,12 @@ async def _run_merged(
     custom_css: str = "",
     language: str = "ko",
     title: str | None = None,
-) -> bool:
+) -> tuple[bool, list[tuple[Path, str]]]:
     import pypdf
     from playwright.async_api import async_playwright
 
     expanded = _expand_split_chapters(chapters, root, config)
+    missing_images: list[tuple[Path, str]] = []
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     temp_dir = Path(tempfile.mkdtemp(prefix="book_binder_merge_"))
@@ -576,7 +644,7 @@ async def _run_merged(
         async with async_playwright() as pw:
             browser = await _launch_chromium(pw)
             if browser is None:
-                return False
+                return False, []
             parts: list[tuple[ChapterFile, Path, str]] = []
             try:
                 for idx, (chapter, raw) in enumerate(expanded):
@@ -589,6 +657,7 @@ async def _run_merged(
                         out_path=part_out,
                         custom_css=custom_css,
                         language=language,
+                        missing_images=missing_images,
                     )
                     parts.append((chapter, part_out, chapter_title))
             finally:
@@ -614,7 +683,7 @@ async def _run_merged(
 
     size_kb = out_path.stat().st_size // 1024
     print(f"  ✅ {out_path.name}  ({len(parts)}개 챕터 병합, {size_kb} KB)")
-    return True
+    return True, missing_images
 
 
 async def _launch_chromium(pw):
@@ -672,18 +741,20 @@ def build_pdf(
         title = title_override or (config.title if config else None) or root.name
         out_path = pdf_dir / f"{merge_name}.pdf"
         print(f"\U0001f4c4 병합 대상: {len(chapters)}개 파일 → {out_path}")
-        ok = asyncio.run(
+        ok, missing_images = asyncio.run(
             _run_merged(chapters, root, config, out_path, tip_pattern, custom_css, language, title)
         )
         if not ok:
             raise RuntimeError("PDF 병합 실패")
+        _print_missing_images(missing_images, root)
         return out_path
 
     print(f"\U0001f4c4 변환 대상: {len(chapters)}개 파일 → {pdf_dir}")
-    ok_n, fail_n, out_paths = asyncio.run(
+    ok_n, fail_n, out_paths, missing_images = asyncio.run(
         _run_all(chapters, root, config, pdf_dir, tip_pattern, custom_css, language)
     )
     print(f"완료: {ok_n}개 성공 / {fail_n}개 실패")
+    _print_missing_images(missing_images, root)
     if fail_n:
         raise RuntimeError(f"{fail_n}개 챕터 PDF 변환 실패")
     return out_paths

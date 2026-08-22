@@ -18,10 +18,14 @@ from __future__ import annotations
 import fnmatch
 import re
 import unicodedata
+from collections.abc import Hashable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TypeVar
 
 import yaml
+
+_K = TypeVar("_K", bound=Hashable)
 
 _ROMAN = {
     "I": 1,
@@ -205,6 +209,21 @@ def _is_excluded(path: Path, patterns: list[str]) -> bool:
 def _natural_sort_key(path: Path) -> list:
     parts = re.split(r"(\d+)", str(path))
     return [int(p) if p.isdigit() else p.lower() for p in parts]
+
+
+def dedupe_suffix(key: _K, seen: dict[_K, int]) -> str:
+    """key가 이미 등장한 적 있으면 "-2", "-3"... 접미사를, 처음이면 빈
+    문자열을 반환한다(순수 함수) — seen을 그 자리에서 갱신한다.
+
+    html_book.py(섹션 id 충돌 방지)와 pdf_book.py(split로 조각난 파일의
+    출력 경로 충돌 방지)가 문서 순서 접두("-2"부터 시작, 첫 등장은 접미사
+    없음) 규칙을 각자 손으로 다시 구현하고 있었다 — 알고리즘은 완전히
+    같은데 한쪽만 고치면(예: 접미사 형식 변경) HTML·PDF의 중복 처리
+    규칙이 조용히 어긋날 수 있어 공용 함수로 뺐다.
+    """
+    count = seen.get(key, 0)
+    seen[key] = count + 1
+    return "" if count == 0 else f"-{count + 1}"
 
 
 def _robust_children(d: Path) -> list[Path]:

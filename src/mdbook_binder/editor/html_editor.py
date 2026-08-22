@@ -36,6 +36,29 @@ class _StagedEdit(TypedDict):
 _StagedChange = _StagedEdit | Literal["deleted"]
 
 
+def _preserved_kind(tag: Tag) -> str | None:
+    """섹션 저장 시 편집 대상 마크다운에서 제외하고 원본 그대로 보존해야
+    하는 요소(figure/다이어그램/콜아웃)인지 판정한다(순수 함수).
+
+    _html_section_to_markdown()(편집용 마크다운 생성)과
+    _replace_section_content()(저장 시 재조립) 양쪽이 "무엇을 보존
+    대상으로 볼지" 판정을 공유해야 한다 — 두 곳에서 각자 다른 조건을
+    쓰면 한쪽만 인식하는 요소가 생겨 조용히 사라지거나 중복될 수 있다.
+    """
+    if tag.name == "figure":
+        return "figure"
+    if tag.name != "div":
+        return None
+    classes: list[str] = tag.get("class") or []  # type: ignore[assignment]
+    if "tip-box" in classes:
+        return "tip-box"
+    if "mermaid" in classes:
+        return "diagram"
+    if "my-8" in classes and tag.find("div", class_="mermaid"):
+        return "diagram"
+    return None
+
+
 def _protect_code_blocks(clone: BeautifulSoup) -> dict[str, str]:
     """`<pre><code class="language-X">` 블록을 안전한 토큰으로 바꾸고, 완성된
     마크다운에서 되돌릴 치환表(토큰 → ` ```X\\n...\\n``` `)을 반환한다.
@@ -354,6 +377,20 @@ class BookHTMLEditor:
     def get_pending_additions(self, section_id: str) -> list[dict]:
         return list(self._added_images.get(section_id, []))
 
+    def deleted_section_ids(self) -> set[str]:
+        """이번 세션에서 삭제 스테이징된 섹션 id 목록을 반환한다.
+
+        server.py의 이미지 재매핑(apply_all_changes()가 만든 새 soup에서
+        image_editor가 참조하던 <img> 태그를 src 문자열로 다시 찾는 로직)이
+        이미 삭제된 섹션에 속했던 이미지 항목까지 매칭 대상으로 끼워 넣지
+        않도록 걸러내는 데 쓰인다 — 그러지 않으면 동일 src를 가진 이미지가
+        문서에 두 개 이상 있을 때, 삭제된 섹션의 이미지 항목이 먼저
+        선점(pop)해 살아있는 다른 이미지의 자리를 가로채고, 정작 그 살아있는
+        이미지에 대한 삭제/교체 요청은 매칭 실패로 조용히 무시되는 회귀가
+        있었다(실사용 재현·확인됨).
+        """
+        return {sid for sid, change in self._staged.items() if change == "deleted"}
+
     def apply_all_changes(self) -> BeautifulSoup:
         """스테이징된 모든 변경을 soup 사본에 적용한다. 디스크 저장은 호출부 책임."""
         for section_id, change in self._staged.items():
@@ -365,6 +402,7 @@ class BookHTMLEditor:
             if change == "deleted":
                 sec.decompose()
                 self._remove_toc_entry(section_id)
+                self._unlink_dead_references(section_id)
             else:
                 new_title = change.get("title", "")
                 h2 = sec.find("h2")
@@ -437,8 +475,15 @@ class BookHTMLEditor:
 
         링크는(strip=["a"]로 예전엔 지웠었다) 그대로 살려서 markdownify에
         넘긴다 — 지워버리면 저장 시 아무것도 안 건드린 문장에서도 링크(외부
-        URL 포함)가 통째로 사라지는 회귀가 있었다(실사용 재현·확인됨). 콜아웃
-        (tip-box)은 markdownify가 `<div class="tip-box">`의 의미를 모르고
+        URL 포함)가 통째로 사라지는 회귀가 있었다(실사용 재현·확인됨). 이미지도
+        마찬가지다 — `<figure>`로 감싸진 이미지(에디터의 "이미지 추가" 기능이
+        붙인 것, _append_figure() 참고)만 편집 대상에서 제외하고, 저작
+        마크다운의 일반 `![alt](src)`(빌드되면 `<figure>` 없이 `<p><img></p>`가
+        됨, render.py 참고)는 링크와 똑같이 markdownify에 그대로 넘겨야 한다.
+        예전에는 `<figure>` 제거 뒤 남은 `<img>`까지 전부 지우는 별도 루프가
+        있어서, 아무것도 안 건드린 섹션을 열었다가 저장만 해도(no-op) 저작
+        이미지가 마크다운에서 통째로 사라지는 회귀가 있었다(실사용 재현·확인됨).
+        콜아웃(tip-box)은 markdownify가 `<div class="tip-box">`의 의미를 모르고
         일반 `<p>`로 뭉개버려(등록된 마커 이모지만 남고 상자 스타일이
         사라짐), figure/다이어그램과 같은 방식으로 편집 대상에서 아예
         제외하고 원본을 그대로 보존한다(_replace_section_content() 참고).
@@ -452,10 +497,19 @@ class BookHTMLEditor:
         if h2:
             h2.decompose()
 
+        # 아래 제거 대상은 _preserved_kind()가 판정하는 것과 같은 집합이다
+        # (figure/다이어그램/tip-box) — 이쪽만 고치고 저쪽을 안 고치면
+        # 한쪽만 인식하는 요소가 생겨 조용히 사라지거나 중복될 수 있으니
+        # 두 곳을 함께 유지해야 한다(_preserved_kind() docstring 참고).
+        # _preserved_kind()를 여기서 그대로 재사용하지 않는 이유는, my-8
+        # 래퍼를 먼저 통째로 지운 뒤에야 순서대로 최신 상태를 다시
+        # find_all()해야 안전하기 때문이다 — 미리 한 번에 스냅샷을 떠서
+        # 반복하면(예: find_all(["figure","div"]) 한 번) my-8 부모가 이미
+        # decompose()된 뒤 그 자식(중첩된 mermaid)에 다시 접근하려다
+        # AttributeError가 난다(bs4 decompose()는 속성을 지워버림 — 직접
+        # 확인함).
         for fig in clone.find_all("figure"):
             fig.decompose()
-        for img in clone.find_all("img"):
-            img.decompose()
         for div in clone.find_all("div", class_="my-8"):
             if div.find("div", class_="mermaid"):
                 div.decompose()
@@ -487,39 +541,78 @@ class BookHTMLEditor:
         )
 
     def _replace_section_content(self, sec: Tag, new_html: str) -> None:
-        """섹션의 텍스트/콘텐츠 자식을 교체하되 figure/다이어그램/콜아웃은 보존한다."""
-        preserved = []
+        """섹션의 텍스트/콘텐츠 자식을 교체하되 figure/다이어그램/콜아웃은
+        원래 있던 자리 근처에 다시 끼워 넣는다.
+
+        편집 가능한 마크다운에는 이 요소들 자체가 아예 안 보이므로
+        (_html_section_to_markdown 참고) 정확한 삽입 지점을 알 방법은 없다
+        — 대신 "일반 콘텐츠 태그 몇 개 뒤에 있었는지"를 기억해뒀다가 새
+        콘텐츠에서 같은 지점에 되돌려 놓는다. 예전에는 무조건 새 콘텐츠를
+        다 채운 뒤 맨 끝에 이어붙여서, 편집 여부와 무관하게 저장할 때마다
+        다이어그램·콜아웃이 섹션 맨 뒤로 밀려나는 회귀가 있었다(실사용
+        재현·확인됨) — "문단A → 다이어그램 → 문단B" 구조가 저장 후
+        "문단A → 문단B → 다이어그램"이 됐다.
+        """
+        heading: Tag | None = None
+        preserved: list[tuple[Tag, int]] = []
+        content_count = 0
         for child in list(sec.children):
             if not isinstance(child, Tag):
                 continue
             if child.name == "h2":
-                preserved.append(("heading", child))
-            elif child.name == "figure":
-                preserved.append(("figure", child))
-            elif child.name == "div" and "tip-box" in (child.get("class") or []):
-                preserved.append(("tip-box", child))
-            elif (
-                child.name == "div"
-                and ("my-8" in (child.get("class") or []) and child.find("div", class_="mermaid"))
-                or child.name == "div"
-                and "mermaid" in (child.get("class") or [])
-            ):
-                preserved.append(("diagram", child))
-
-        sec.clear()
-
-        for kind, tag in preserved:
-            if kind == "heading":
-                sec.append(tag)
-                break
+                heading = child
+            elif _preserved_kind(child) is not None:
+                preserved.append((child, content_count))
+            else:
+                content_count += 1
 
         new_soup = BeautifulSoup(new_html, "html.parser")
-        for elem in list(new_soup.children):
-            sec.append(elem)
+        # 위치 계산의 고정 기준 좌표계 — 아래 루프에서 절대 변경하지 않는다.
+        new_children: list = list(new_soup.children)
 
-        for kind, tag in preserved:
-            if kind in ("figure", "diagram", "tip-box"):
-                sec.append(tag)
+        def _target_index(position: int) -> int:
+            counted = 0
+            for i, c in enumerate(new_children):
+                if isinstance(c, Tag):
+                    if counted == position:
+                        return i
+                    counted += 1
+            return len(new_children)
+
+        final_children: list = list(new_children)
+        # 원본 문서 순서의 역순으로 삽입한다. target_index는 항상 고정된
+        # new_children 기준으로만 계산해야 한다 — 계속 자라는 final_children을
+        # 기준으로 다시 스캔하면, 이미 삽입해둔 다른 보존 요소도 Tag이므로
+        # "일반 콘텐츠 태그"로 잘못 세어져, 문단 없이 바로 인접한 보존 요소
+        # 둘 이상(다이어그램 두 개가 연달아 오는 등)의 상대 순서가 뒤집히는
+        # 회귀가 있었다(실사용 재현·확인됨 — "다이어그램A→다이어그램B"가
+        # 저장 후 "다이어그램B→다이어그램A"가 됐다). 역순으로 처리하면 같은
+        # position을 공유하는 요소끼리도 원본상 뒤에 있던 것부터 같은 자리에
+        # 꽂히고, 그다음 처리되는(원본상 앞선) 요소가 매번 그 앞으로 끼어들어
+        # 최종적으로 원본 순서가 그대로 보존된다.
+        for tag, position in reversed(preserved):
+            final_children.insert(_target_index(position), tag)
+
+        sec.clear()
+        if heading is not None:
+            sec.append(heading)
+        for child in final_children:
+            sec.append(child)
+
+    def _unlink_dead_references(self, section_id: str) -> None:
+        """삭제된 섹션을 가리키던 다른 섹션의 상호참조 링크를 정리한다.
+
+        html_book.py의 _rewrite_internal_links()가 챕터 간 상대경로 링크를
+        `href="#{section_id}"` 앵커로 재작성해두는데(build_html() 참고),
+        delete_section()은 사이드바 TOC 항목만 지우고 본문에 남은 이
+        앵커 링크는 그대로 뒀다 — 삭제 후에도 다른 챕터에 아무 데도 안
+        가는 죽은 링크가 남는 회귀였다(실사용 재현·확인됨). 이 시점엔
+        _remove_toc_entry()가 이미 사이드바 쪽 링크는 지운 뒤라, 여기서
+        찾는 건 본문 안의 상호참조뿐이다. 링크를 통째로 지우면 문장이
+        부자연스러워지므로 href만 없애고 텍스트는 그대로 남긴다(unwrap).
+        """
+        for link in self.soup.find_all("a", href=f"#{section_id}"):
+            link.unwrap()
 
     def _remove_toc_entry(self, section_id: str) -> None:
         link = self.soup.find("a", href=f"#{section_id}")

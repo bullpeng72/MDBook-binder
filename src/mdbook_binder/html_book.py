@@ -22,6 +22,7 @@ from mdbook_binder.manifest import (
     LOCALE_STRINGS,
     BookConfig,
     ChapterFile,
+    dedupe_suffix,
     resolve,
     resolve_split_targets,
 )
@@ -74,9 +75,7 @@ def _dedupe_slug(slug: str, seen: dict[str, int]) -> str:
     _deduplicate_section_ids()는 편집 시점에만 이를 고치므로, 빌드 시점부터
     애초에 중복 id를 만들지 않도록 여기서 막는다.
     """
-    count = seen.get(slug, 0)
-    seen[slug] = count + 1
-    return slug if count == 0 else f"{slug}-{count + 1}"
+    return slug + dedupe_suffix(slug, seen)
 
 
 def _rewrite_internal_links(html_body: str, chap_dir: Path, path_to_sid: dict[str, str]) -> str:

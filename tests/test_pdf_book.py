@@ -21,6 +21,9 @@ from mdbook_binder.pdf_book import (
     _is_occupied,
     _merge_bands,
     _nearest_safe_y,
+    _print_missing_images,
+    _rewrite_img_paths,
+    _unlink_cross_file_references,
 )
 
 
@@ -239,3 +242,67 @@ class TestBuildPdfPageHtml:
     def test_title_is_html_escaped(self):
         html = _build_pdf_page_html("<p>body</p>", "A & B", language="en")
         assert "<title>A &amp; B</title>" in html
+
+
+class TestUnlinkCrossFileReferences:
+    """회귀 테스트: build pdf는 html_book.py의 build_html()과 달리 챕터 간
+    상호참조 링크를 앵커로 재작성하지 않는다 — 각 챕터가 별개 Playwright
+    페이지로 독립 렌더링된 뒤 pypdf로 병합되는 구조라, 한 챕터의 HTML 안에
+    다른 챕터의 앵커 대상 자체가 존재하지 않기 때문이다(pdf_book.py 모듈
+    docstring 참고). 원본 .md 상대경로를 클릭 가능한 것처럼 보이는 죽은
+    링크로 남기는 대신, 링크 껍데기만 벗기고 텍스트는 보존해야 한다."""
+
+    def test_internal_md_link_is_unwrapped_to_plain_text(self):
+        html = '<p>자세한 내용은 <a href="../Part_I/Chapter_05.md">5장</a>을 참고.</p>'
+        out = _unlink_cross_file_references(html)
+        assert out == "<p>자세한 내용은 5장을 참고.</p>"
+
+    def test_md_link_with_fragment_is_also_unwrapped(self):
+        html = '<a href="./Chapter_02.md#절">2장 §절</a>'
+        assert _unlink_cross_file_references(html) == "2장 §절"
+
+    def test_external_url_is_untouched(self):
+        html = '<a href="https://example.com">외부 링크</a>'
+        assert _unlink_cross_file_references(html) == html
+
+    def test_same_page_fragment_is_untouched(self):
+        html = '<a href="#섹션">같은 페이지 내부</a>'
+        assert _unlink_cross_file_references(html) == html
+
+
+class TestRewriteImgPaths:
+    def test_missing_image_recorded_without_raising(self, tmp_path: Path):
+        """회귀 테스트: html_book.py는 누락된 이미지를 빌드 끝에 요약
+        경고하는데, pdf_book.py는 존재 여부 확인 자체가 없어 경로 오타가
+        있어도 아무 경고 없이 조용히 깨진 이미지로 나왔다."""
+        missing: list[tuple[Path, str]] = []
+        html = _rewrite_img_paths('<img src="no-such-file.png">', tmp_path, missing)
+
+        assert len(missing) == 1
+        assert missing[0][1] == "no-such-file.png"
+        assert "file://" in html  # 경고만 기록하고 렌더링 자체는 계속 진행
+
+    def test_existing_image_not_recorded_as_missing(self, tmp_path: Path):
+        (tmp_path / "pic.png").write_bytes(b"\x89PNG")
+        missing: list[tuple[Path, str]] = []
+        _rewrite_img_paths('<img src="pic.png">', tmp_path, missing)
+        assert missing == []
+
+    def test_missing_param_omitted_does_not_raise(self, tmp_path: Path):
+        """missing을 안 넘기는 기존 호출부와의 하위 호환 — 존재 여부 확인을
+        건너뛰고 예전처럼 경로만 치환한다."""
+        html = _rewrite_img_paths('<img src="no-such-file.png">', tmp_path)
+        assert "file://" in html
+
+
+class TestPrintMissingImages:
+    def test_empty_list_prints_nothing(self, tmp_path: Path, capsys):
+        _print_missing_images([], tmp_path)
+        assert capsys.readouterr().out == ""
+
+    def test_prints_relative_path_and_original_src(self, tmp_path: Path, capsys):
+        abs_path = tmp_path / "images" / "missing.png"
+        _print_missing_images([(abs_path, "images/missing.png")], tmp_path)
+        out = capsys.readouterr().out
+        assert "누락된 이미지 1건" in out
+        assert "images/missing.png" in out

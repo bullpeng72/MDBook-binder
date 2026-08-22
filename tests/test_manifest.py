@@ -10,6 +10,7 @@ from mdbook_binder.manifest import (
     OrderConfig,
     SplitConfig,
     TranslationConfig,
+    dedupe_suffix,
     resolve,
     resolve_split_targets,
     write_minimal_book_yaml,
@@ -232,6 +233,37 @@ class TestResolveSplitTargets:
         config = BookConfig(split=SplitConfig(files=["nope.md"]))
 
         assert resolve_split_targets(tmp_path, config) == set()
+
+
+class TestDedupeSuffix:
+    """html_book.py(섹션 id 충돌 방지)와 pdf_book.py(split 조각 파일명
+    충돌 방지)가 공유하는 알고리즘 — 두 곳이 각자 손으로 다시 구현하다
+    어긋날 위험을 없애기 위해 공용 함수로 뺐다."""
+
+    def test_first_occurrence_has_no_suffix(self):
+        assert dedupe_suffix("개요", {}) == ""
+
+    def test_second_occurrence_gets_dash_two(self):
+        seen: dict[str, int] = {}
+        dedupe_suffix("개요", seen)
+        assert dedupe_suffix("개요", seen) == "-2"
+
+    def test_third_occurrence_gets_dash_three(self):
+        seen: dict[str, int] = {}
+        dedupe_suffix("개요", seen)
+        dedupe_suffix("개요", seen)
+        assert dedupe_suffix("개요", seen) == "-3"
+
+    def test_different_keys_tracked_independently(self):
+        seen: dict[str, int] = {}
+        dedupe_suffix("a", seen)
+        assert dedupe_suffix("b", seen) == ""  # a와 무관하게 b는 첫 등장
+
+    def test_works_with_non_string_hashable_keys(self):
+        """pdf_book.py는 str이 아니라 Path를 key로 쓴다."""
+        seen: dict[Path, int] = {}
+        dedupe_suffix(Path("ch1.md"), seen)
+        assert dedupe_suffix(Path("ch1.md"), seen) == "-2"
 
 
 class TestWriteMinimalBookYaml:

@@ -18,11 +18,18 @@ from mdbook_binder.mermaid_wrap import auto_wrap_long_labels
 # translation.py도 재사용한다 — 번역 전 "손대면 안 되는" 블록을 가리는 경계와
 # HTML 렌더링 전 마크다운 파서로부터 블록을 보호하는 경계가 동일해야 한다.
 HTML_BLOCK_RE = re.compile(r"@@HTML_START@@\s*\n(.*?)@@HTML_END@@", re.DOTALL)
-MERMAID_FENCE_RE = re.compile(r"```mermaid\s*\n(.*?)```", re.DOTALL)
-# 닫는 펜스 뒤를 [ \t]*(줄 안 공백만)로 끊는다 — DOTALL에서 \s는 개행도 먹으므로
-# \s*$였을 때 블록 뒤의 빈 줄(다음 문단과의 구분선)까지 집어삼켜, 치환 후
+# 여는/닫는 펜스 모두 줄 시작(^, MULTILINE)에 앵커링한다 — 앵커링 없이 그냥
+# "```mermaid"만 찾으면 blockquote 안의 "> ```mermaid"(줄 시작이 "> "이지 실제
+# 펜스는 줄 중간)에서도 매칭되는데, 그 콘텐츠엔 "> " 접두어가 그대로 남아있어
+# Mermaid가 못 읽는 소스가 되고 BQ_CODE_FENCE_RE보다 먼저 낚아채가 버려
+# blockquote 코드펜스 처리 자체를 무력화한다(실사용 재현·확인됨 — 콜아웃 안에
+# 다이어그램을 넣고 싶은 저자가 자연스럽게 마주칠 수 있는 조합인데도 에러 없이
+# 조용히 깨진 다이어그램이 나왔다). 닫는 펜스 뒤를 [ \t]*(줄 안 공백만)로
+# 끊는 이유는 BQ_CODE_FENCE_RE와 동일 — DOTALL에서 \s는 개행도 먹으므로 \s*$였을
+# 때 블록 뒤의 빈 줄(다음 문단과의 구분선)까지 집어삼켜, 치환 후
 # "@@BLOCK_n@@\n\n다음 문단"이 "@@BLOCK_n@@\n다음 문단"으로 줄어들었다 — markdown
 # 파서가 둘을 별개 <p>가 아니라 <br>로 이어붙인 한 문단으로 오인하는 회귀였다.
+MERMAID_FENCE_RE = re.compile(r"^```mermaid\s*\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 BQ_CODE_FENCE_RE = re.compile(r"^> ```(\w*)\n(.*?)^> ```[ \t]*$", re.MULTILINE | re.DOTALL)
 
 
